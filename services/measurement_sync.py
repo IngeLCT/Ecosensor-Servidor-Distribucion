@@ -12,9 +12,12 @@ from services.device_registry import (
     host_for_device,
     refresh_active_devices,
 )
+from services.app_logging import get_logger
 from services.esp_client import build_endpoints, configure_push_host, fetch_json, fetch_readings_range, sync_time_if_needed
 from shared.formatters import row_from_payload
 from storage.measurements_store import get_latest_measurement, latest_source_id, missing_source_id_ranges, save_measurement
+
+logger = get_logger()
 
 _sync_locks: dict[str, asyncio.Lock] = {}
 _synced_notice_printed: set[str] = set()
@@ -36,7 +39,9 @@ def summarize_response(response: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def record_sync_event(device_id: str, event: str, **details: Any) -> dict[str, Any]:
-    return {'device_id': device_id, 'event': event, **details}
+    clean_details = {key: value for key, value in details.items() if value is not None}
+    logger.info('sync_event device=%s event=%s details=%s', device_id, event, clean_details)
+    return {'device_id': device_id, 'event': event, **clean_details}
 
 
 def _lock_for(device_id: str) -> asyncio.Lock:
@@ -153,12 +158,13 @@ async def _configure_push_host_if_overdue(device_id: str, host: str, row: dict[s
         reported_push_host = confirm_data.get('push_host') if isinstance(confirm_data, dict) else None
         can_push = confirm_data.get('can_push') if isinstance(confirm_data, dict) else None
         wifi = confirm_data.get('wifi') if isinstance(confirm_data, dict) else None
-        print(
-            f"[measurement_sync] {device_id}: push sin recibir hace {age_s}s; "
+        message = (
+            f"{device_id}: push sin recibir hace {age_s}s; "
             f"push_host enviado={result.get('push_host')}; "
-            f"reportado={reported_push_host}; wifi={wifi}; can_push={can_push}",
-            flush=True,
+            f"reportado={reported_push_host}; wifi={wifi}; can_push={can_push}"
         )
+        print(f"[measurement_sync] {message}", flush=True)
+        logger.info(message)
 
 
 def display_host(host: str) -> str:
@@ -228,12 +234,22 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
     active = await ensure_device_active(device_id)
     if not active:
         target_id = (device_id or DEVICE_ID).strip().lower() or DEVICE_ID
+        logger.warning('sync omitida device=%s reason=no_active_device', target_id)
         record_sync_event(target_id, 'inactive', reason='no_active_device')
         return await asyncio.to_thread(get_latest_measurement, target_id)
 
     selected_device_id = str(active['device_id'])
     host_now = str(active['host'])
     initial_row = await asyncio.to_thread(get_latest_measurement, selected_device_id)
+    logger.info(
+        'sync inicio device=%s host=%s fetch_latest=%s sync_history=%s ultima_local_id=%s ultima_local_ts=%s',
+        selected_device_id,
+        host_now,
+        fetch_latest,
+        sync_history,
+        (initial_row or {}).get('measurement_id'),
+        (initial_row or {}).get('timestamp'),
+    )
 
     async with _lock_for(selected_device_id):
         record_sync_event(
@@ -287,6 +303,14 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                 # del push del ESP32.
                 lecturas = await fetch_json(endpoints_now['lecturas'], timeout=3.0)
                 data = lecturas.get('data') if lecturas.get('ok') else None
+                logger.info(
+                    'fetch_latest device=%s host=%s ok=%s status=%s valid=%s',
+                    selected_device_id,
+                    host_now,
+                    lecturas.get('ok'),
+                    lecturas.get('status'),
+                    data.get('valid') if isinstance(data, dict) else None,
+                )
                 if isinstance(data, dict) and data.get('valid'):
                     row = row_from_payload(data)
                     if row:
@@ -347,27 +371,26 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                         f"{start_id}-{end_id}" if start_id != end_id else str(start_id)
                         for start_id, end_id in missing_ranges[-4:]
                     )
-                    print(
-                        f"[measurement_sync] inicio sincronizacion {selected_device_id}: "
-                        f"{pending_count} datos por sincronizar; rangos={ranges_preview}",
-                        flush=True,
+                    message = (
+                        f"inicio sincronizacion {selected_device_id}: "
+                        f"{pending_count} datos por sincronizar; rangos={ranges_preview}"
                     )
+                    print(f"[measurement_sync] {message}", flush=True)
+                    logger.info(message)
                     sync_started_printed = True
                 else:
                     suppress_zero_sync_log = True
                     if sync_history and selected_device_id not in _synced_notice_printed:
-                        print(
-                            f"[measurement_sync] {selected_device_id}: sincronizado; 0 datos pendientes",
-                            flush=True,
-                        )
+                        message = f"{selected_device_id}: sincronizado; 0 datos pendientes"
+                        print(f"[measurement_sync] {message}", flush=True)
+                        logger.info(message)
                         _synced_notice_printed.add(selected_device_id)
             else:
                 suppress_zero_sync_log = True
                 if sync_history and selected_device_id not in _synced_notice_printed:
-                    print(
-                        f"[measurement_sync] {selected_device_id}: sincronizado; sin ID remoto pendiente",
-                        flush=True,
-                    )
+                    message = f"{selected_device_id}: sincronizado; sin ID remoto pendiente"
+                    print(f"[measurement_sync] {message}", flush=True)
+                    logger.info(message)
                     _synced_notice_printed.add(selected_device_id)
 
             # Recuperación de histórico por rangos faltantes concretos.
@@ -423,21 +446,23 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                         if pending_count > 0 and now_progress - last_progress_print >= SYNC_PROGRESS_INTERVAL_SECONDS:
                             synced_so_far = min(total_received, pending_count)
                             remaining = max(0, pending_count - synced_so_far)
-                            print(
-                                f"[measurement_sync] progreso {selected_device_id}: "
+                            message = (
+                                f"progreso {selected_device_id}: "
                                 f"{synced_so_far}/{pending_count} recibidos, "
                                 f"{total_inserted} insertados, faltan {remaining}, "
-                                f"lotes={batches}, ultimo_rango={chunk_from}-{chunk_to}",
-                                flush=True,
+                                f"lotes={batches}, ultimo_rango={chunk_from}-{chunk_to}"
                             )
+                            print(f"[measurement_sync] {message}", flush=True)
+                            logger.info(message)
                             last_progress_print = now_progress
 
                         if not ok and not rows:
-                            print(
-                                f"[measurement_sync] {selected_device_id}: bloque sin progreso "
-                                f"range={chunk_from}-{chunk_to} response={summarize_response(missing)}",
-                                flush=True,
+                            message = (
+                                f"{selected_device_id}: bloque sin progreso "
+                                f"range={chunk_from}-{chunk_to} response={summarize_response(missing)}"
                             )
+                            print(f"[measurement_sync] {message}", flush=True)
+                            logger.warning(message)
                             break
                         chunk_to = chunk_from - 1
 
@@ -469,7 +494,9 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                 )
 
         if not sync_started_printed:
-            print(f"[measurement_sync] inicio sincronizacion {selected_device_id}", flush=True)
+            message = f"inicio sincronizacion {selected_device_id}"
+            print(f"[measurement_sync] {message}", flush=True)
+            logger.info(message)
 
         if not row:
             row = await asyncio.to_thread(get_latest_measurement, selected_device_id)
@@ -478,23 +505,26 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
             if sync_history and sync_started_printed:
                 final_remaining = max(0, pending_count - min(total_received, pending_count)) if 'pending_count' in locals() else 0
                 if final_remaining > 0:
-                    print(
-                        f"[measurement_sync] fin sincronizacion {selected_device_id}: "
-                        f"{total_inserted} datos sincronizados; faltan {final_remaining}",
-                        flush=True,
+                    message = (
+                        f"fin sincronizacion {selected_device_id}: "
+                        f"{total_inserted} datos sincronizados; faltan {final_remaining}"
                     )
+                    print(f"[measurement_sync] {message}", flush=True)
+                    logger.info(message)
                 else:
-                    print(
-                        f"[measurement_sync] fin sincronizacion {selected_device_id}: "
-                        f"{total_inserted} datos sincronizados",
-                        flush=True,
+                    message = (
+                        f"fin sincronizacion {selected_device_id}: "
+                        f"{total_inserted} datos sincronizados"
                     )
+                    print(f"[measurement_sync] {message}", flush=True)
+                    logger.info(message)
             else:
-                print(
-                    f"[measurement_sync] fin sincronizacion {selected_device_id}: "
-                    f"{total_inserted} datos sincronizados",
-                    flush=True,
+                message = (
+                    f"fin sincronizacion {selected_device_id}: "
+                    f"{total_inserted} datos sincronizados"
                 )
+                print(f"[measurement_sync] {message}", flush=True)
+                logger.info(message)
 
         record_sync_event(
             selected_device_id,
@@ -531,14 +561,14 @@ async def sync_all_active_measurements() -> list[dict[str, Any] | None]:
 
 
 async def background_sync_loop(interval_seconds: float = 300.0) -> None:
-    print(
-        f"[measurement_sync] backend iniciado: sincronizacion automatica cada {interval_seconds:.0f}s",
-        flush=True,
-    )
+    message = f"backend iniciado: sincronizacion automatica cada {interval_seconds:.0f}s"
+    print(f"[measurement_sync] {message}", flush=True)
+    logger.info(message)
     while True:
         try:
             await sync_all_active_measurements()
         except Exception as exc:
+            logger.exception('error en background_sync_loop: %s', exc)
             record_sync_event('background', 'loop_error', error=str(exc)[:220])
             # El loop debe sobrevivir caídas puntuales de red/ESP32.
             pass

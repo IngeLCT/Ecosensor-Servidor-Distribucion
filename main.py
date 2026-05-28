@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, Response
 from nicegui import app, ui
 
 from config import STATIC_DIR, UI_HOST, UI_PORT
+from services.app_logging import get_logger
 from services.device_registry import active_devices, mark_device_seen, probe_failures, remember_host
 from services.measurement_sync import background_sync_loop
 from services.mdns_service import start_mdns_service
@@ -33,6 +34,8 @@ _register_pages()
 
 app.add_static_files('/static', STATIC_DIR)
 
+logger = get_logger()
+
 _background_sync_task: asyncio.Task | None = None
 
 
@@ -40,6 +43,7 @@ def _start_background_sync() -> None:
     global _background_sync_task
     install_connection_reset_filter()
     if _background_sync_task is None or _background_sync_task.done():
+        logger.info('iniciando tarea de sincronizacion en segundo plano')
         _background_sync_task = asyncio.create_task(background_sync_loop())
 
 
@@ -60,14 +64,17 @@ async def api_measurements_push(request: Request) -> JSONResponse:
         return JSONResponse({'ok': False, 'error': f'invalid_json: {exc}'}, status_code=400)
 
     if not isinstance(payload, dict):
+        logger.warning('push_measurement rechazado: payload no es objeto JSON')
         return JSONResponse({'ok': False, 'error': 'json_object_required'}, status_code=400)
 
     row = row_from_payload(payload)
     if not row:
+        logger.warning('push_measurement rechazado: payload sin mediciones utiles keys=%s', sorted(payload.keys()))
         return JSONResponse({'ok': False, 'error': 'empty_payload'}, status_code=400)
 
     device_id = str(row.get('id') or row.get('device_id') or '').strip().lower()
     if not device_id.startswith('ecosensor'):
+        logger.warning('push_measurement rechazado: device_id invalido=%r', device_id)
         return JSONResponse({'ok': False, 'error': 'invalid_device_id'}, status_code=400)
 
     row['id'] = device_id
@@ -86,6 +93,16 @@ async def api_measurements_push(request: Request) -> JSONResponse:
     mark_device_seen(device_id, host, {'device_id': device_id, 'ip': client_host})
 
     inserted = await asyncio.to_thread(save_measurement, host, row)
+    logger.info(
+        'push_measurement device=%s host=%s inserted=%s measurement_id=%s timestamp=%s time_valid=%s source=%s',
+        device_id,
+        host,
+        inserted,
+        row.get('measurement_id'),
+        row.get('timestamp'),
+        row.get('time_valid'),
+        row.get('time_source'),
+    )
     return JSONResponse({
         'ok': True,
         'inserted': inserted,
@@ -121,5 +138,6 @@ def graph_read(
 
 
 start_mdns_service()
+logger.info('EcoSensor Servidor iniciado host=%s port=%s', UI_HOST, UI_PORT)
 
 ui.run(host=UI_HOST, port=UI_PORT, title='EcoSensor Servidor', reload=False, storage_secret='ecosensor-servidor-local')
