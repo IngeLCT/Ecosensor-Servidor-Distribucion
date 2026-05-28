@@ -86,6 +86,23 @@ async def api_measurements_push(request: Request) -> JSONResponse:
         remember_host(client_host, device_id)
     mark_device_seen(device_id, host, {'device_id': device_id, 'ip': client_host})
 
+    print(
+        '[push_measurement] '
+        f"{device_id} | "
+        f"measurement_id={row.get('measurement_id')} | "
+        f"timestamp={row.get('timestamp')} | "
+        f"PM1.0={row.get('pm1p0')} | "
+        f"PM2.5={row.get('pm2p5')} | "
+        f"PM4.0={row.get('pm4p0')} | "
+        f"PM10.0={row.get('pm10p0')} | "
+        f"VOC={row.get('voc')} | "
+        f"NOx={row.get('nox')} | "
+        f"CO2={row.get('co2')} | "
+        f"Temperatura={row.get('temp')} | "
+        f"Humedad={row.get('hum')}",
+        flush=True,
+    )
+
     inserted = await asyncio.to_thread(save_measurement, host, row)
     return JSONResponse({
         'ok': True,

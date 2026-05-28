@@ -226,29 +226,41 @@ def _parse_device_datetime(value: Any) -> datetime | None:
     if not text:
         return None
 
+    # En este proyecto el dashboard muestra la hora del EcoSensor en crudo
+    # (por ejemplo 2026-05-28T12:27:52Z se ve como 12:27:52). Para detectar
+    # desfases usamos esa misma referencia visual/local y no convertimos la Z
+    # como zona UTC real.
     if text.endswith('Z'):
-        text = text[:-1] + '+00:00'
+        text = text[:-1]
+    if 'T' in text:
+        text = text.replace('T', ' ', 1)
+    if '+' in text:
+        text = text.split('+', 1)[0]
+    if len(text) > 19:
+        text = text[:19]
 
     for fmt in ('%d-%m-%Y %H:%M:%S', '%Y-%m-%d %H:%M:%S'):
         try:
             return datetime.strptime(text, fmt)
         except ValueError:
             pass
-
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone().replace(tzinfo=None)
-    return parsed
+    return None
 
 
 def _time_drift_seconds(status_data: dict[str, Any]) -> int | None:
-    device_dt = _parse_device_datetime(status_data.get('current_datetime'))
-    if device_dt is None:
+    candidates = (
+        status_data.get('current_datetime'),
+        status_data.get('last_measurement_timestamp'),
+    )
+    drifts: list[int] = []
+    now = datetime.now()
+    for value in candidates:
+        device_dt = _parse_device_datetime(value)
+        if device_dt is not None:
+            drifts.append(int((now - device_dt).total_seconds()))
+    if not drifts:
         return None
-    return int((datetime.now() - device_dt).total_seconds())
+    return max(drifts, key=lambda item: abs(item))
 
 
 def sync_time_if_needed_sync(host: str, timeout: float = 4.0) -> dict[str, Any]:
