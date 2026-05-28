@@ -7,3 +7,21 @@ env/
 /data/settings.json
 /data/*.sqlite3
 /data/*.sqlite3-*
+
+# PyInstaller
+build/
+dist/
+*.spec
+*.manifest
+*.toc
+*.pkg
+*.pyz
+
+# Inno Setup
+installer/output/
+output/
+*.exe
+*.setup
+*.iss.tmp
+*.bak
+*.log
