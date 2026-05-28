@@ -11,11 +11,11 @@ from services.windows_asyncio import install_connection_reset_filter, install_wi
 
 install_windows_selector_policy()
 
+from config import STATIC_DIR, UI_HOST, UI_PORT  # debe cargarse antes de importar NiceGUI
+
 from fastapi import Query, Request
 from fastapi.responses import JSONResponse, Response
 from nicegui import app, ui
-
-from config import STATIC_DIR, UI_HOST, UI_PORT
 from services.device_registry import active_devices, mark_device_seen, probe_failures, remember_host
 from services.measurement_sync import background_sync_loop
 from services.mdns_service import start_mdns_service
