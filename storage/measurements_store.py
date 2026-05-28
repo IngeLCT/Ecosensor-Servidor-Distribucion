@@ -7,6 +7,9 @@ from typing import Any
 from config import DATA_DIR, MEASUREMENTS_DB_FILE
 
 
+TIMESTAMP_DRIFT_TOLERANCE_SECONDS = 10 * 60
+
+
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS measurements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,6 +191,7 @@ def _measurement_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 def get_latest_measurement(device_id: str | None = None) -> dict[str, Any] | None:
     ensure_db(device_id)
+    repair_future_estimated_timestamps(device_id)
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
@@ -197,13 +201,7 @@ def get_latest_measurement(device_id: str | None = None) -> dict[str, Any] | Non
                    pm1p0, pm2p5, pm4p0, pm10p0,
                    voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum, window_s
             FROM measurements
-            ORDER BY
-                COALESCE(
-                    datetime(replace(replace(substr(device_timestamp, 1, 19), 'T', ' '), 'Z', '')),
-                    datetime(replace(replace(substr(received_at, 1, 19), 'T', ' '), 'Z', ''))
-                ) DESC,
-                COALESCE(source_id, id) DESC,
-                id DESC
+            ORDER BY received_at DESC, id DESC
             LIMIT 1
             '''
         ).fetchone()
@@ -414,44 +412,46 @@ def graph_rows_since(row_id: int, limit: int = 500, device_id: str | None = None
 
 
 def repair_future_estimated_timestamps(device_id: str | None = None) -> int:
-    """Corrige timestamps estimados guardados en UTC como si fueran hora local.
+    """Corrige timestamps de dispositivo fuera de tolerancia contra received_at.
 
-    Si el servidor corre en zona horaria local distinta de UTC, una estimación vieja pudo
-    quedar adelantada varias horas. Solo toca filas estimadas/no confiables en el futuro.
+    La hora del EcoSensor puede quedar marcada como válida aunque esté adelantada
+    o atrasada. Durante sincronización/consulta, si la diferencia entre
+    device_timestamp y la hora de recepción del servidor supera ±10 minutos, se
+    reemplaza por received_at local y se marca como corregida.
     """
     ensure_db(device_id)
-    offset = datetime.now().astimezone().utcoffset() or timedelta(0)
-    if offset == timedelta(0):
-        return 0
-
-    now_local = datetime.now().replace(tzinfo=None)
-    max_allowed = now_local + timedelta(minutes=10)
     repaired = 0
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             '''
-            SELECT id, device_timestamp
+            SELECT id, device_timestamp, received_at, time_source
             FROM measurements
             WHERE device_timestamp IS NOT NULL AND device_timestamp != ''
-              AND COALESCE(time_source, '') != 'esp'
+              AND received_at IS NOT NULL AND received_at != ''
+              AND COALESCE(time_source, '') NOT LIKE '%drift_corrected'
             '''
         ).fetchall()
         for row in rows:
+            device_ts = _parse_timestamp_local(row['device_timestamp'])
+            if device_ts is None:
+                continue
             try:
-                ts = datetime.fromisoformat(str(row['device_timestamp']).replace('Z', ''))
+                received_local = _received_at_local(str(row['received_at']))
             except ValueError:
                 continue
-            if ts.tzinfo is not None:
-                ts = ts.astimezone().replace(tzinfo=None)
-            if ts <= max_allowed:
+            drift_s = abs((device_ts - received_local).total_seconds())
+            if drift_s <= TIMESTAMP_DRIFT_TOLERANCE_SECONDS:
                 continue
-            corrected = ts + offset
-            if corrected > max_allowed:
-                continue
+            original_source = str(row['time_source'] or 'esp')
+            corrected_source = f'{original_source}_drift_corrected'
             conn.execute(
-                'UPDATE measurements SET device_timestamp = ?, time_source = ? WHERE id = ?',
-                (corrected.isoformat(timespec='seconds'), 'estimated_repaired', row['id']),
+                '''
+                UPDATE measurements
+                SET device_timestamp = ?, time_valid = 0, time_source = ?
+                WHERE id = ?
+                ''',
+                (received_local.isoformat(timespec='seconds'), corrected_source, row['id']),
             )
             repaired += 1
         conn.commit()
@@ -502,6 +502,51 @@ def measurements_csv_text(device_id: str | None = None) -> str:
     return output.getvalue()
 
 
+
+def _parse_timestamp_local(value: Any) -> datetime | None:
+    text = str(value or '').strip()
+    if not text:
+        return None
+    if text.endswith('Z'):
+        text = text[:-1]
+    if 'T' in text:
+        text = text.replace('T', ' ', 1)
+    if '+' in text:
+        text = text.split('+', 1)[0]
+    if len(text) > 19:
+        text = text[:19]
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%d-%m-%Y %H:%M:%S'):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+    return None
+
+
+def _received_at_local(received_at: str) -> datetime:
+    parsed = datetime.fromisoformat(received_at.replace('Z', '+00:00'))
+    return parsed.astimezone().replace(tzinfo=None)
+
+
+def _sanitize_device_timestamp(device_timestamp: Any, received_at: str, time_source: str | None, time_valid: int | None) -> tuple[str | None, str | None, int | None]:
+    if not device_timestamp:
+        return None, time_source, time_valid
+
+    timestamp_text = str(device_timestamp)
+    parsed_device = _parse_timestamp_local(timestamp_text)
+    if parsed_device is None:
+        return timestamp_text, time_source, time_valid
+
+    received_local = _received_at_local(received_at)
+    drift_s = abs((parsed_device - received_local).total_seconds())
+    if drift_s <= TIMESTAMP_DRIFT_TOLERANCE_SECONDS:
+        return timestamp_text, time_source, time_valid
+
+    corrected = received_local.isoformat(timespec='seconds')
+    corrected_source = f'{time_source or "esp"}_drift_corrected'
+    return corrected, corrected_source, 0
+
+
 def save_measurement(host: str, row: dict[str, Any]) -> bool:
     """Guarda una medición válida. Devuelve True si insertó una fila nueva."""
     received_at = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
@@ -512,6 +557,12 @@ def save_measurement(host: str, row: dict[str, Any]) -> bool:
     time_valid_bool = _bool_or_none(row.get('time_valid'))
     time_valid = None if time_valid_bool is None else int(time_valid_bool)
     time_source = row.get('time_source') or ('esp' if time_valid else 'estimated' if time_valid == 0 else None)
+    device_timestamp, time_source, time_valid = _sanitize_device_timestamp(
+        device_timestamp,
+        received_at,
+        time_source,
+        time_valid,
+    )
 
     values = {
         'device_id': device_id,
