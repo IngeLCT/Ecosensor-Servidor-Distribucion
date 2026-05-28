@@ -1,9 +1,19 @@
 import os
 from pathlib import Path
 
+APP_NAME = 'EcoSensor Servidor'
 APP_DIR = Path(__file__).resolve().parent
-DATA_DIR = APP_DIR / 'data'
 STATIC_DIR = APP_DIR / 'static'
+
+_LOCALAPPDATA = os.getenv('LOCALAPPDATA')
+if _LOCALAPPDATA:
+    DATA_DIR = Path(_LOCALAPPDATA) / APP_NAME
+else:
+    DATA_DIR = APP_DIR / 'data'
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault('NICEGUI_STORAGE_PATH', str(DATA_DIR / '.nicegui'))
+
 SETTINGS_FILE = DATA_DIR / 'settings.json'
 MEASUREMENTS_DB_FILE = DATA_DIR / 'measurements.sqlite3'
 
