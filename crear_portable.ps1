@@ -73,8 +73,14 @@ Copy-Item -Force (Join-Path $SourceDir "README_PORTABLE.txt") (Join-Path $Portab
 
 Write-Step "Instalando pip en Python portable si hace falta"
 $PythonExe = Join-Path $PortableDir "python\python.exe"
+$PreviousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $PipCheck = & $PythonExe -m pip --version 2>$null
-if ($LASTEXITCODE -ne 0) {
+$PipExitCode = $LASTEXITCODE
+$ErrorActionPreference = $PreviousErrorActionPreference
+
+if ($PipExitCode -ne 0) {
+    Write-Host "pip no esta instalado en el Python portable; descargando get-pip.py..."
     $GetPip = Join-Path $PortableDir "get-pip.py"
     Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $GetPip
     & $PythonExe $GetPip
