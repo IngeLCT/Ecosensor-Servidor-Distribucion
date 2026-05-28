@@ -1,0 +1,595 @@
+import csv
+import io
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from config import DATA_DIR, MEASUREMENTS_DB_FILE
+
+
+SCHEMA = '''
+CREATE TABLE IF NOT EXISTS measurements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    host TEXT NOT NULL,
+    device_timestamp TEXT,
+    received_at TEXT NOT NULL,
+    source_id INTEGER,
+    boot_id INTEGER,
+    uptime_s INTEGER,
+    time_valid INTEGER,
+    time_source TEXT,
+    pm1p0 REAL,
+    pm2p5 REAL,
+    pm4p0 REAL,
+    pm10p0 REAL,
+    voc REAL,
+    nox REAL,
+    co2 REAL,
+    temp REAL,
+    hum REAL,
+    scd_temp REAL,
+    scd_hum REAL,
+    sen_temp REAL,
+    sen_hum REAL,
+    window_s INTEGER
+);
+'''
+
+
+def _safe_device_id(device_id: str | None = None) -> str:
+    value = str(device_id or 'ecosensor01').strip().lower()
+    return ''.join(ch for ch in value if ch.isalnum() or ch in {'_', '-'}) or 'ecosensor01'
+
+
+def db_file_for_device(device_id: str | None = None):
+    """Devuelve el archivo SQLite independiente para un EcoSensor.
+
+    Compatibilidad: el historial existente se conserva como `ecosensor01` usando
+    `data/measurements.sqlite3`. Los demás sensores usan un archivo separado.
+    """
+    safe_id = _safe_device_id(device_id)
+    if safe_id == 'ecosensor01':
+        return MEASUREMENTS_DB_FILE
+    return DATA_DIR / f'measurements_{safe_id}.sqlite3'
+
+
+def ensure_db(device_id: str | None = None) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        conn.executescript(SCHEMA)
+        columns = {row[1] for row in conn.execute('PRAGMA table_info(measurements)')}
+        if 'source_id' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN source_id INTEGER')
+        if 'boot_id' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN boot_id INTEGER')
+        if 'uptime_s' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN uptime_s INTEGER')
+        if 'time_valid' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN time_valid INTEGER')
+        if 'time_source' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN time_source TEXT')
+        if 'scd_temp' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN scd_temp REAL')
+        if 'scd_hum' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN scd_hum REAL')
+        if 'sen_temp' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN sen_temp REAL')
+        if 'sen_hum' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN sen_hum REAL')
+        conn.execute(
+            '''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_measurements_device_timestamp
+            ON measurements(device_id, device_timestamp)
+            WHERE source_id IS NULL AND device_timestamp IS NOT NULL AND device_timestamp != ''
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_measurements_device_source_id
+            ON measurements(device_id, source_id)
+            WHERE source_id IS NOT NULL
+            '''
+        )
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_measurements_received_at ON measurements(received_at)')
+
+
+def clear_measurements(device_id: str | None = None) -> int:
+    """Borra el historial local del servidor y reinicia el contador SQLite."""
+    ensure_db(device_id)
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        deleted = conn.execute('DELETE FROM measurements').rowcount
+        conn.execute("DELETE FROM sqlite_sequence WHERE name = 'measurements'")
+        conn.commit()
+    return int(deleted or 0)
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None or value == '':
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None or value == '':
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _round2_or_none(value: Any) -> float | None:
+    number = _float_or_none(value)
+    return None if number is None else round(number, 2)
+
+
+def _rounded_int_or_none(value: Any) -> int | None:
+    number = _float_or_none(value)
+    return None if number is None else int(round(number))
+
+
+def _csv_decimal(value: Any) -> str:
+    number = _round2_or_none(value)
+    return '' if number is None else f'{number:.2f}'
+
+
+def _csv_int(value: Any) -> str | int:
+    number = _rounded_int_or_none(value)
+    return '' if number is None else number
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None or value == '':
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {'1', 'true', 'yes', 'si', 'sí'}
+    return bool(value)
+
+
+def _source_id_from_row(row: dict[str, Any]) -> int | None:
+    return _int_or_none(row.get('measurement_id') or row.get('source_id'))
+
+
+def _measurement_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        'id': row['device_id'],
+        'host': row['host'],
+        'timestamp': row['device_timestamp'],
+        'received_at': row['received_at'],
+        'measurement_id': row['source_id'],
+        'boot_id': row['boot_id'],
+        'uptime_s': row['uptime_s'],
+        'time_valid': bool(row['time_valid']) if row['time_valid'] is not None else None,
+        'time_source': row['time_source'],
+        'pm1p0': _round2_or_none(row['pm1p0']),
+        'pm2p5': _round2_or_none(row['pm2p5']),
+        'pm4p0': _round2_or_none(row['pm4p0']),
+        'pm10p0': _round2_or_none(row['pm10p0']),
+        'voc': _round2_or_none(row['voc']),
+        'nox': _round2_or_none(row['nox']),
+        'co2': _rounded_int_or_none(row['co2']),
+        'temp': _round2_or_none(row['temp']),
+        'hum': _rounded_int_or_none(row['hum']),
+        'scd_temp': _round2_or_none(row['scd_temp']) if 'scd_temp' in row.keys() else None,
+        'scd_hum': _round2_or_none(row['scd_hum']) if 'scd_hum' in row.keys() else None,
+        'sen_temp': _round2_or_none(row['sen_temp']) if 'sen_temp' in row.keys() else None,
+        'sen_hum': _round2_or_none(row['sen_hum']) if 'sen_hum' in row.keys() else None,
+        'window_s': row['window_s'],
+    }
+
+
+def get_latest_measurement(device_id: str | None = None) -> dict[str, Any] | None:
+    ensure_db(device_id)
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            '''
+            SELECT device_id, host, device_timestamp, received_at, source_id,
+                   boot_id, uptime_s, time_valid, time_source,
+                   pm1p0, pm2p5, pm4p0, pm10p0,
+                   voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum, window_s
+            FROM measurements
+            ORDER BY
+                COALESCE(
+                    datetime(replace(replace(substr(device_timestamp, 1, 19), 'T', ' '), 'Z', '')),
+                    datetime(replace(replace(substr(received_at, 1, 19), 'T', ' '), 'Z', ''))
+                ) DESC,
+                COALESCE(source_id, id) DESC,
+                id DESC
+            LIMIT 1
+            '''
+        ).fetchone()
+    return _measurement_row_to_dict(row) if row else None
+
+
+
+def latest_source_id(device_id: str = 'ecosensor01') -> int:
+    ensure_db(device_id)
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        value = conn.execute(
+            'SELECT COALESCE(MAX(source_id), 0) FROM measurements WHERE device_id = ?',
+            (device_id,),
+        ).fetchone()[0]
+    return int(value or 0)
+
+
+def latest_contiguous_source_id(device_id: str = 'ecosensor01') -> int:
+    """Devuelve el último source_id sincronizado sin huecos desde 1.
+
+    No basta con MAX(source_id): si llegó por push la medición 970 pero faltan
+    históricos 156..969, MAX=970 haría creer que no falta nada. Esta función
+    encuentra el último ID continuo para reanudar /lecturas/since desde ahí.
+    """
+    ensure_db(device_id)
+    expected = 1
+    latest_contiguous = 0
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        rows = conn.execute(
+            '''
+            SELECT DISTINCT source_id
+            FROM measurements
+            WHERE device_id = ? AND source_id IS NOT NULL AND source_id > 0
+            ORDER BY source_id ASC
+            ''',
+            (device_id,),
+        )
+        for row in rows:
+            source_id = int(row[0] or 0)
+            if source_id < expected:
+                continue
+            if source_id != expected:
+                break
+            latest_contiguous = source_id
+            expected += 1
+    return latest_contiguous
+
+
+def missing_source_id_ranges(device_id: str = 'ecosensor01', remote_last_id: int = 0) -> list[tuple[int, int]]:
+    """Rangos de source_id faltantes en SQLite, inclusivos y ascendentes."""
+    remote_last_id = max(0, int(remote_last_id or 0))
+    if remote_last_id <= 0:
+        return []
+
+    ensure_db(device_id)
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        present = [
+            int(row[0])
+            for row in conn.execute(
+                '''
+                SELECT DISTINCT source_id
+                FROM measurements
+                WHERE device_id = ? AND source_id IS NOT NULL
+                  AND source_id BETWEEN 1 AND ?
+                ORDER BY source_id ASC
+                ''',
+                (device_id, remote_last_id),
+            )
+        ]
+
+    ranges: list[tuple[int, int]] = []
+    expected = 1
+    for source_id in present:
+        if source_id < expected:
+            continue
+        if source_id > expected:
+            ranges.append((expected, source_id - 1))
+        expected = source_id + 1
+    if expected <= remote_last_id:
+        ranges.append((expected, remote_last_id))
+    return ranges
+
+
+def _split_device_timestamp(timestamp: str | None) -> tuple[str, str]:
+    value = (timestamp or '').strip()
+    if not value:
+        return '', ''
+    if 'T' in value:
+        date_part, time_part = value.split('T', 1)
+        return date_part, time_part.rstrip('Z').split('+', 1)[0].split('-', 1)[0]
+    if ' ' in value:
+        date_part, time_part = value.split(' ', 1)
+        return date_part, time_part.rstrip('Z')
+    return value, ''
+
+
+def _graph_row(row: sqlite3.Row) -> dict[str, Any]:
+    fecha, hora = _split_device_timestamp(row['device_timestamp'])
+    return {
+        '_row_id': row['source_id'] if row['source_id'] is not None else row['id'],
+        'id': row['device_id'],
+        'device_id': row['device_id'],
+        'fecha': fecha,
+        'hora': hora,
+        'pm1p0': _round2_or_none(row['pm1p0']),
+        'pm2p5': _round2_or_none(row['pm2p5']),
+        'pm4p0': _round2_or_none(row['pm4p0']),
+        'pm10p0': _round2_or_none(row['pm10p0']),
+        'voc': _round2_or_none(row['voc']),
+        'nox': _round2_or_none(row['nox']),
+        'co2': _rounded_int_or_none(row['co2']),
+        'temp': _round2_or_none(row['temp']),
+        'hum': _rounded_int_or_none(row['hum']),
+        'scd_temp': _round2_or_none(row['scd_temp']) if 'scd_temp' in row.keys() else None,
+        'scd_hum': _round2_or_none(row['scd_hum']) if 'scd_hum' in row.keys() else None,
+        'sen_temp': _round2_or_none(row['sen_temp']) if 'sen_temp' in row.keys() else None,
+        'sen_hum': _round2_or_none(row['sen_hum']) if 'sen_hum' in row.keys() else None,
+    }
+
+
+def graph_latest_row(device_id: str | None = None) -> dict[str, Any] | None:
+    ensure_db(device_id)
+    repair_future_estimated_timestamps(device_id)
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            '''
+            SELECT id, source_id, device_id, device_timestamp,
+                   pm1p0, pm2p5, pm4p0, pm10p0,
+                   voc, nox, co2, temp, hum
+            FROM measurements
+            ORDER BY
+                COALESCE(
+                    datetime(replace(replace(substr(device_timestamp, 1, 19), 'T', ' '), 'Z', '')),
+                    datetime(replace(replace(substr(received_at, 1, 19), 'T', ' '), 'Z', ''))
+                ) DESC,
+                COALESCE(source_id, id) DESC,
+                id DESC
+            LIMIT 1
+            '''
+        ).fetchone()
+    return _graph_row(row) if row else None
+
+
+def graph_rows_history(limit: int = 5000, device_id: str | None = None) -> list[dict[str, Any]]:
+    ensure_db(device_id)
+    repair_future_estimated_timestamps(device_id)
+    limit = max(1, min(20000, int(limit)))
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            '''
+            SELECT id, source_id, device_id, device_timestamp,
+                   pm1p0, pm2p5, pm4p0, pm10p0,
+                   voc, nox, co2, temp, hum
+            FROM (
+                SELECT id, source_id, device_id, device_timestamp,
+                       pm1p0, pm2p5, pm4p0, pm10p0,
+                       voc, nox, co2, temp, hum
+                FROM measurements
+                ORDER BY COALESCE(source_id, id) DESC, id DESC
+                LIMIT ?
+            ) t
+            ORDER BY COALESCE(source_id, id) ASC, id ASC
+            ''',
+            (limit,),
+        ).fetchall()
+    return [_graph_row(row) for row in rows]
+
+
+def graph_rows_all(device_id: str | None = None) -> list[dict[str, Any]]:
+    ensure_db(device_id)
+    repair_future_estimated_timestamps(device_id)
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            '''
+            SELECT id, source_id, device_id, device_timestamp,
+                   pm1p0, pm2p5, pm4p0, pm10p0,
+                   voc, nox, co2, temp, hum
+            FROM measurements
+            ORDER BY COALESCE(source_id, id) ASC, id ASC
+            '''
+        ).fetchall()
+    return [_graph_row(row) for row in rows]
+
+
+def graph_rows_since(row_id: int, limit: int = 500, device_id: str | None = None) -> list[dict[str, Any]]:
+    ensure_db(device_id)
+    repair_future_estimated_timestamps(device_id)
+    row_id = max(0, int(row_id))
+    limit = max(1, min(20000, int(limit)))
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            '''
+            SELECT id, source_id, device_id, device_timestamp,
+                   pm1p0, pm2p5, pm4p0, pm10p0,
+                   voc, nox, co2, temp, hum
+            FROM measurements
+            WHERE COALESCE(source_id, id) > ?
+            ORDER BY COALESCE(source_id, id) ASC, id ASC
+            LIMIT ?
+            ''',
+            (row_id, limit),
+        ).fetchall()
+    return [_graph_row(row) for row in rows]
+
+
+def repair_future_estimated_timestamps(device_id: str | None = None) -> int:
+    """Corrige timestamps estimados guardados en UTC como si fueran hora local.
+
+    Si el servidor corre en zona horaria local distinta de UTC, una estimación vieja pudo
+    quedar adelantada varias horas. Solo toca filas estimadas/no confiables en el futuro.
+    """
+    ensure_db(device_id)
+    offset = datetime.now().astimezone().utcoffset() or timedelta(0)
+    if offset == timedelta(0):
+        return 0
+
+    now_local = datetime.now().replace(tzinfo=None)
+    max_allowed = now_local + timedelta(minutes=10)
+    repaired = 0
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            '''
+            SELECT id, device_timestamp
+            FROM measurements
+            WHERE device_timestamp IS NOT NULL AND device_timestamp != ''
+              AND COALESCE(time_source, '') != 'esp'
+            '''
+        ).fetchall()
+        for row in rows:
+            try:
+                ts = datetime.fromisoformat(str(row['device_timestamp']).replace('Z', ''))
+            except ValueError:
+                continue
+            if ts.tzinfo is not None:
+                ts = ts.astimezone().replace(tzinfo=None)
+            if ts <= max_allowed:
+                continue
+            corrected = ts + offset
+            if corrected > max_allowed:
+                continue
+            conn.execute(
+                'UPDATE measurements SET device_timestamp = ?, time_source = ? WHERE id = ?',
+                (corrected.isoformat(timespec='seconds'), 'estimated_repaired', row['id']),
+            )
+            repaired += 1
+        conn.commit()
+    return repaired
+
+
+def measurements_csv_text(device_id: str | None = None) -> str:
+    ensure_db(device_id)
+    repair_future_estimated_timestamps(device_id)
+    output = io.StringIO()
+    fieldnames = [
+        'id', 'device_id', 'Fecha de medicion', 'Hora de medicion',
+        'PM1.0', 'PM2.5', 'PM4.0', 'PM10.0',
+        'VOC', 'NOx', 'CO2', 'Temperatura', 'Humedad',
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            '''
+            SELECT id, source_id, device_id, device_timestamp,
+                   pm1p0, pm2p5, pm4p0, pm10p0,
+                   voc, nox, co2, temp, hum
+            FROM measurements
+            ORDER BY COALESCE(source_id, id) ASC, id ASC
+            '''
+        )
+        for row in rows:
+            date_part, time_part = _split_device_timestamp(row['device_timestamp'])
+            writer.writerow({
+                'id': row['source_id'] if row['source_id'] is not None else row['id'],
+                'device_id': row['device_id'],
+                'Fecha de medicion': date_part,
+                'Hora de medicion': time_part,
+                'PM1.0': _csv_decimal(row['pm1p0']),
+                'PM2.5': _csv_decimal(row['pm2p5']),
+                'PM4.0': _csv_decimal(row['pm4p0']),
+                'PM10.0': _csv_decimal(row['pm10p0']),
+                'VOC': _csv_decimal(row['voc']),
+                'NOx': _csv_decimal(row['nox']),
+                'CO2': _csv_int(row['co2']),
+                'Temperatura': _csv_decimal(row['temp']),
+                'Humedad': _csv_int(row['hum']),
+            })
+
+    return output.getvalue()
+
+
+def save_measurement(host: str, row: dict[str, Any]) -> bool:
+    """Guarda una medición válida. Devuelve True si insertó una fila nueva."""
+    received_at = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+    device_id = str(row.get('id') or row.get('device_id') or '').strip() or 'ecosensor01'
+    ensure_db(device_id)
+    device_timestamp = row.get('timestamp') or None
+    source_id = _source_id_from_row(row)
+    time_valid_bool = _bool_or_none(row.get('time_valid'))
+    time_valid = None if time_valid_bool is None else int(time_valid_bool)
+    time_source = row.get('time_source') or ('esp' if time_valid else 'estimated' if time_valid == 0 else None)
+
+    values = {
+        'device_id': device_id,
+        'host': host,
+        'device_timestamp': device_timestamp,
+        'received_at': received_at,
+        'source_id': source_id,
+        'boot_id': _int_or_none(row.get('boot_id')),
+        'uptime_s': _int_or_none(row.get('uptime_s')),
+        'time_valid': time_valid,
+        'time_source': time_source,
+        'pm1p0': _round2_or_none(row.get('pm1p0')),
+        'pm2p5': _round2_or_none(row.get('pm2p5')),
+        'pm4p0': _round2_or_none(row.get('pm4p0')),
+        'pm10p0': _round2_or_none(row.get('pm10p0')),
+        'voc': _round2_or_none(row.get('voc')),
+        'nox': _round2_or_none(row.get('nox')),
+        'co2': _rounded_int_or_none(row.get('co2')),
+        'temp': _round2_or_none(row.get('temp')),
+        'hum': _rounded_int_or_none(row.get('hum')),
+        'scd_temp': _round2_or_none(row.get('scd_temp')),
+        'scd_hum': _round2_or_none(row.get('scd_hum')),
+        'sen_temp': _round2_or_none(row.get('sen_temp')),
+        'sen_hum': _round2_or_none(row.get('sen_hum')),
+        'window_s': _int_or_none(row.get('window_s')),
+    }
+
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        cursor = conn.execute(
+            '''
+            INSERT OR IGNORE INTO measurements (
+                device_id, host, device_timestamp, received_at, source_id,
+                boot_id, uptime_s, time_valid, time_source,
+                pm1p0, pm2p5, pm4p0, pm10p0,
+                voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum, window_s
+            ) VALUES (
+                :device_id, :host, :device_timestamp, :received_at, :source_id,
+                :boot_id, :uptime_s, :time_valid, :time_source,
+                :pm1p0, :pm2p5, :pm4p0, :pm10p0,
+                :voc, :nox, :co2, :temp, :hum, :scd_temp, :scd_hum, :sen_temp, :sen_hum, :window_s
+            )
+            ''',
+            values,
+        )
+        inserted = cursor.rowcount > 0
+        if not inserted and source_id is not None and device_timestamp:
+            prefer_live_source = time_source in {'esp_push', 'esp_live'}
+            conn.execute(
+                '''
+                UPDATE measurements
+                SET host = :host,
+                    device_timestamp = :device_timestamp,
+                    received_at = :received_at,
+                    boot_id = COALESCE(:boot_id, boot_id),
+                    uptime_s = COALESCE(:uptime_s, uptime_s),
+                    time_valid = COALESCE(:time_valid, time_valid),
+                    time_source = COALESCE(:time_source, time_source),
+                    pm1p0 = COALESCE(:pm1p0, pm1p0),
+                    pm2p5 = COALESCE(:pm2p5, pm2p5),
+                    pm4p0 = COALESCE(:pm4p0, pm4p0),
+                    pm10p0 = COALESCE(:pm10p0, pm10p0),
+                    voc = COALESCE(:voc, voc),
+                    nox = COALESCE(:nox, nox),
+                    co2 = COALESCE(:co2, co2),
+                    temp = COALESCE(:temp, temp),
+                    hum = COALESCE(:hum, hum),
+                    scd_temp = COALESCE(:scd_temp, scd_temp),
+                    scd_hum = COALESCE(:scd_hum, scd_hum),
+                    sen_temp = COALESCE(:sen_temp, sen_temp),
+                    sen_hum = COALESCE(:sen_hum, sen_hum),
+                    window_s = COALESCE(:window_s, window_s)
+                WHERE device_id = :device_id AND source_id = :source_id
+                  AND (
+                    COALESCE(time_source, '') NOT IN ('esp_push', 'esp_live')
+                    OR :prefer_live_source = 1
+                  )
+                ''',
+                {**values, 'prefer_live_source': 1 if prefer_live_source else 0},
+            )
+        conn.commit()
+        return inserted

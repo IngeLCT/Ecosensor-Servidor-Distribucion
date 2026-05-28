@@ -1,0 +1,194 @@
+import asyncio
+from typing import Any
+
+from nicegui import app, ui
+
+from services.device_registry import active_device_options, ensure_active_devices, registry_revision
+from services.measurement_sync import sync_sensor_measurements
+from shared.formatters import format_value
+from storage.measurements_store import get_latest_measurement
+from shared.styles import add_styles
+from pages.pollutants_modal import pollutants_info_card
+
+
+@ui.page('/dashboard')
+def dashboard() -> None:
+    ui.page_title('EcoSensor Mediciones')
+    add_styles()
+
+    selected_device_id: str | None = None
+    seen_registry_revision = {'value': registry_revision()}
+    quick_sync_tasks: dict[str, asyncio.Task] = {}
+
+    with ui.element('div').classes('dashboard'):
+        with ui.element('nav').classes('top-nav'):
+            ui.link('Inicio', '/dashboard')
+            ui.label('|')
+            ui.link('Gráficas Partículas', '/graficas/particulas')
+            ui.label('|')
+            ui.link('Gráficas VOC & NOx', '/graficas/voc-nox')
+            ui.label('|')
+            ui.link('Gráficas CO2, Temperatura & Humedad', '/graficas/ambientales')
+            ui.label('|')
+            ui.link('Gráficas del Historial', '/graficas/historial')
+            ui.label('|')
+
+        with ui.column().classes('items-center justify-center gap-3'):
+            ui.label('LCT Didacticos').classes('brand-title')
+            ui.image('/static/LCT.png').props('fit=contain no-spinner').classes('connect-logo')
+
+        ui.label('Mediciones Ambientales').classes('section-title')
+        with ui.row().classes('items-center justify-center gap-3 history-controls'):
+            ui.label('ID:').classes('section-title')
+            sensor_select = ui.select({}, value=None).props('outlined dense').classes('w-64 device-select')
+
+        pollutants_info_card()
+
+        table = ui.html('').classes('w-full')
+        date_info = ui.html('').classes('status-line mt-6')
+        time_info = ui.html('').classes('status-line')
+        connection_info = ui.label('').classes('status-line mt-3')
+        with ui.row().classes('justify-center gap-3 mt-4'):
+            ui.button(
+                'Descargar CSV',
+                on_click=lambda: ui.navigate.to(f'/api/measurements.csv?device_id={selected_device_id or ""}'),
+            ).props('unelevated no-caps').classes('button1')
+
+    def render_table(row: dict[str, Any] | None) -> None:
+        if not row:
+            table.set_content(
+                '<table class="measure-table"><tr><th>Mediciones</th><th>Valor</th><th>Unidad</th></tr></table>'
+            )
+            return
+
+        rows = [
+            ('PM1.0', format_value(row.get('pm1p0')), 'ug/m3'),
+            ('PM2.5', format_value(row.get('pm2p5')), 'ug/m3'),
+            ('PM4.0', format_value(row.get('pm4p0')), 'ug/m3'),
+            ('PM10.0', format_value(row.get('pm10p0')), 'ug/m3'),
+            ('VOC', format_value(row.get('voc')), 'Index'),
+            ('NOx', format_value(row.get('nox')), 'Index'),
+            ('CO2', format_value(row.get('co2'), 0), 'ppm'),
+            ('Temperatura', format_value(row.get('temp')), 'C'),
+            ('Humedad Relativa', format_value(row.get('hum'), 0), '%'),
+        ]
+        html_rows = ''.join(f'<tr><td>{name}</td><td>{value}</td><td>{unit}</td></tr>' for name, value, unit in rows)
+        table.set_content(
+            '<table class="measure-table">'
+            '<tr><th>Mediciones</th><th>Valor</th><th>Unidad</th></tr>'
+            f'{html_rows}'
+            '</table>'
+        )
+
+    def format_date_dd_mm_yyyy(date_value: str) -> str:
+        value = (date_value or '').strip()
+        if not value:
+            return ''
+        normalized = value.replace('.', '-').replace('/', '-')
+        parts = normalized.split('-')
+        if len(parts) >= 3 and len(parts[0]) == 4:
+            return f'{parts[2].zfill(2)}-{parts[1].zfill(2)}-{parts[0]}'
+        return value
+
+    def clean_time(time_value: str) -> str:
+        value = (time_value or '').strip().rstrip('Z')
+        if '+' in value:
+            value = value.split('+', 1)[0]
+        if len(value) >= 8 and value[2] == ':' and value[5] == ':':
+            return value[:8]
+        return value
+
+    def split_timestamp(timestamp: str) -> tuple[str, str]:
+        value = (timestamp or '').strip()
+        if not value:
+            return '', ''
+        if 'T' in value:
+            date_part, time_part = value.split('T', 1)
+            return format_date_dd_mm_yyyy(date_part), clean_time(time_part)
+        if ' ' in value:
+            date_part, time_part = value.split(' ', 1)
+            return format_date_dd_mm_yyyy(date_part), clean_time(time_part)
+        return format_date_dd_mm_yyyy(value), ''
+
+    async def refresh_sensor_options() -> None:
+        nonlocal selected_device_id
+        # No bloquear el dashboard esperando mDNS/LAN/histórico. Si todavía no
+        # hay sensores activos en memoria, lanza la detección en segundo plano;
+        # los push_measurement también marcan dispositivos activos al instante.
+        options = active_device_options()
+        if not options:
+            asyncio.create_task(ensure_active_devices())
+        stored_device_id = str(app.storage.user.get('selected_device_id') or '') or None
+        if stored_device_id:
+            selected_device_id = stored_device_id
+        sensor_select.options = options
+        if not options:
+            selected_device_id = None
+            app.storage.user.pop('selected_device_id', None)
+            sensor_select.value = None
+            sensor_select.update()
+            return
+        if selected_device_id not in options:
+            selected_device_id = next(iter(options))
+            app.storage.user['selected_device_id'] = selected_device_id
+        sensor_select.value = selected_device_id
+        sensor_select.update()
+
+    async def refresh_from_sqlite() -> None:
+        if not selected_device_id:
+            render_table(None)
+            date_info.set_content('')
+            time_info.set_content('')
+            connection_info.set_text('')
+            return
+
+        row = await asyncio.to_thread(get_latest_measurement, selected_device_id)
+        render_table(row)
+        timestamp = (row or {}).get('timestamp') or ''
+        date_part, time_part = split_timestamp(timestamp)
+        date_info.set_content(f'<strong>Fecha última medición:</strong> {date_part}' if date_part else '')
+        time_info.set_content(f'<strong>Hora última medición:</strong> {time_part}' if time_part else '')
+        if row:
+            connection_info.set_text('')
+        else:
+            connection_info.set_text('EcoSensor activo, sin mediciones almacenadas todavía.')
+
+    def schedule_quick_sync(device_id: str | None) -> None:
+        if not device_id:
+            return
+        existing = quick_sync_tasks.get(device_id)
+        if existing and not existing.done():
+            return
+        quick_sync_tasks[device_id] = asyncio.create_task(
+            sync_sensor_measurements(device_id, fetch_latest=True, sync_history=False)
+        )
+
+    async def sync_then_refresh() -> None:
+        await refresh_sensor_options()
+        schedule_quick_sync(selected_device_id)
+        await refresh_from_sqlite()
+
+    async def refresh_options_and_data() -> None:
+        await refresh_sensor_options()
+        await refresh_from_sqlite()
+
+    async def on_sensor_change(event: Any) -> None:
+        nonlocal selected_device_id
+        selected_device_id = str(event.value or '') or None
+        if selected_device_id:
+            app.storage.user['selected_device_id'] = selected_device_id
+        else:
+            app.storage.user.pop('selected_device_id', None)
+        schedule_quick_sync(selected_device_id)
+        await refresh_from_sqlite()
+
+    async def refresh_if_registry_changed() -> None:
+        current = registry_revision()
+        if current != seen_registry_revision['value']:
+            seen_registry_revision['value'] = current
+            await refresh_options_and_data()
+
+    sensor_select.on_value_change(on_sensor_change)
+    ui.timer(1.0, refresh_if_registry_changed)
+    ui.timer(10.0, refresh_from_sqlite)
+    ui.timer(0.1, refresh_options_and_data, once=True)
