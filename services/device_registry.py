@@ -8,7 +8,6 @@ from time import perf_counter
 from typing import Any
 
 from config import DEFAULT_ESP_HOST, DEVICE_ID
-from services.app_logging import get_logger
 from services.esp_client import build_endpoints, fetch_json_sync, normalize_host_input
 from shared.formatters import device_display_name
 from storage.settings_store import load_settings, save_settings
@@ -25,7 +24,6 @@ LAN_SCAN_TIMEOUT_SECONDS = 0.25
 _DEVICE_RE = re.compile(r'^(ecosensor\d+)(?:\.local)?(?::\d+)?$', re.IGNORECASE)
 _REAL_DEVICE_RE = re.compile(r'^ecosensor(0[1-9]|1[0-2])$', re.IGNORECASE)
 
-logger = get_logger()
 
 _active_devices: dict[str, dict[str, Any]] = {}
 _probe_failures: dict[str, dict[str, Any]] = {}
@@ -371,7 +369,6 @@ def _mark_active(host: str, status_data: dict[str, Any] | None = None, device_id
     _active_devices[resolved_device_id] = entry
     _probe_failures.pop(host, None)
     if not previous or previous.get('host') != host:
-        logger.info('device_active device=%s host=%s latency_ms=%s previous_host=%s', resolved_device_id, host, latency_ms, (previous or {}).get('host'))
         _registry_revision += 1
     return entry
 
@@ -403,15 +400,11 @@ def _summarize_probe_error(error: Any) -> str:
 
 
 def _mark_probe_failure(host: str, error: Any) -> None:
-    summary = _summarize_probe_error(error)
-    previous = _probe_failures.get(host, {}).get('error')
     _probe_failures[host] = {
         'host': host,
         'last_probe': _now_iso(),
-        'error': summary,
+        'error': _summarize_probe_error(error),
     }
-    if previous != summary:
-        logger.warning('probe_failure host=%s error=%s', host, summary)
 
 
 def _prune_expired() -> None:
@@ -505,7 +498,6 @@ async def probe_host(host: str, timeout: float = CONFIGURED_PROBE_TIMEOUT_SECOND
 async def refresh_active_devices() -> list[dict[str, Any]]:
     global _last_refresh_at
     async with _probe_lock:
-        started = perf_counter()
         configured = configured_hosts()
         configured_set = set(configured)
         direct_hosts: list[str] = []
@@ -528,16 +520,7 @@ async def refresh_active_devices() -> list[dict[str, Any]]:
         await asyncio.gather(*(limited_probe(host) for host in all_hosts))
         _last_refresh_at = datetime.now()
         _prune_expired()
-        devices = active_devices()
-        logger.info(
-            'discovery_refresh direct=%s lan_open=%s total_probe=%s active=%s elapsed_ms=%s',
-            len(direct_hosts),
-            len(open_lan_hosts),
-            len(all_hosts),
-            [item.get('device_id') for item in devices],
-            int((perf_counter() - started) * 1000),
-        )
-        return devices
+        return active_devices()
 
 
 async def ensure_active_devices() -> list[dict[str, Any]]:

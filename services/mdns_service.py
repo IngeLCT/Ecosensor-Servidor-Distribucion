@@ -9,7 +9,7 @@ from config import MDNS_HOSTNAME, MDNS_SERVICE_TYPE, UI_PORT
 
 _zeroconf: Optional[Zeroconf] = None
 _service_info: Optional[ServiceInfo] = None
-PRINT_MDNS_STATUS = False  # Mantener consola limpia.
+PRINT_MDNS_STATUS = True
 
 
 def _is_useful_lan_ip(value: str) -> bool:
@@ -89,7 +89,7 @@ def start_mdns_service() -> None:
     _zeroconf.register_service(_service_info)
     if PRINT_MDNS_STATUS:
         ip_list = ', '.join(ips)
-        print(f'mDNS activo: http://{MDNS_HOSTNAME}.local:{UI_PORT}/ ({ip_list})')
+        print(f'Servidor mDNS: http://{MDNS_HOSTNAME}.local:{UI_PORT}/ ({ip_list})', flush=True)
 
 
 def stop_mdns_service() -> None:

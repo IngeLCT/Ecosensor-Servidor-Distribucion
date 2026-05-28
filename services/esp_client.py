@@ -12,6 +12,9 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
+TIME_DRIFT_SYNC_THRESHOLD_SECONDS = 10 * 60
+
+
 def normalize_host_input(value: str) -> str:
     value = (value or '').strip()
     if not value:
@@ -217,6 +220,37 @@ def _local_ip_for_target(target_host: str) -> str | None:
     return None
 
 
+
+def _parse_device_datetime(value: Any) -> datetime | None:
+    text = str(value or '').strip()
+    if not text:
+        return None
+
+    if text.endswith('Z'):
+        text = text[:-1] + '+00:00'
+
+    for fmt in ('%d-%m-%Y %H:%M:%S', '%Y-%m-%d %H:%M:%S'):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def _time_drift_seconds(status_data: dict[str, Any]) -> int | None:
+    device_dt = _parse_device_datetime(status_data.get('current_datetime'))
+    if device_dt is None:
+        return None
+    return int((datetime.now() - device_dt).total_seconds())
+
+
 def sync_time_if_needed_sync(host: str, timeout: float = 4.0) -> dict[str, Any]:
     endpoints = build_endpoints(host)
     status = fetch_json_sync(endpoints['status'], timeout=timeout)
@@ -225,8 +259,12 @@ def sync_time_if_needed_sync(host: str, timeout: float = 4.0) -> dict[str, Any]:
 
     status_data = status['data']
     needs_sync = bool(status_data.get('needs_time_sync', not status_data.get('time_valid', False)))
+    drift_s = _time_drift_seconds(status_data)
+    drift_exceeded = drift_s is not None and abs(drift_s) > TIME_DRIFT_SYNC_THRESHOLD_SECONDS
+    if drift_exceeded:
+        needs_sync = True
     if not needs_sync:
-        return {'ok': True, 'host': host, 'status': status, 'synced': False}
+        return {'ok': True, 'host': host, 'status': status, 'synced': False, 'time_drift_s': drift_s}
 
     payload = system_datetime_payload(host)
     sync_response = post_json_sync(endpoints['time'], payload, timeout=timeout)
@@ -235,7 +273,15 @@ def sync_time_if_needed_sync(host: str, timeout: float = 4.0) -> dict[str, Any]:
 
     sync_data = sync_response.get('data')
     synced = bool(sync_response.get('ok') and isinstance(sync_data, dict) and sync_data.get('time_valid'))
-    return {'ok': synced, 'host': host, 'status': status, 'sync': sync_response, 'synced': synced}
+    return {
+        'ok': synced,
+        'host': host,
+        'status': status,
+        'sync': sync_response,
+        'synced': synced,
+        'time_drift_s': drift_s,
+        'forced_by_time_drift': drift_exceeded,
+    }
 
 
 async def sync_time_if_needed(host: str, timeout: float = 4.0) -> dict[str, Any]:
