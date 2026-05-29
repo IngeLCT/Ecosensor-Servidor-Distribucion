@@ -38,7 +38,8 @@ echo Abre en esta PC: http://localhost:8765
 echo En la red local usa la IP que muestre NiceGUI o mDNS: http://ecosensor-servidor.local:8765
 echo.
 
-".\python\python.exe" ".\app\main.py"
+cd /d "%~dp0app"
+"..\python\python.exe" "main.py"
 
 echo.
 echo El servidor se cerro.

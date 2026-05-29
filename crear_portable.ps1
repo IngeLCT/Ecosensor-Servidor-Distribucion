@@ -37,10 +37,26 @@ if (!$pthFile) {
     throw "No se encontro archivo python*._pth dentro de la carpeta python portable."
 }
 $pthContent = Get-Content $pthFile.FullName
-$pthContent = $pthContent | ForEach-Object {
-    if ($_ -eq "#import site") { "import site" } else { $_ }
+$updatedPth = @()
+$addedAppPath = $false
+foreach ($line in $pthContent) {
+    if ($line -eq "..\app") {
+        $addedAppPath = $true
+    }
+    if ($line -eq "#import site") {
+        if (!$addedAppPath) {
+            $updatedPth += "..\app"
+            $addedAppPath = $true
+        }
+        $updatedPth += "import site"
+    } else {
+        $updatedPth += $line
+    }
 }
-Set-Content -Path $pthFile.FullName -Value $pthContent -Encoding ASCII
+if (!$addedAppPath) {
+    $updatedPth += "..\app"
+}
+Set-Content -Path $pthFile.FullName -Value $updatedPth -Encoding ASCII
 
 Write-Step "Copiando app limpia"
 $AppDir = Join-Path $PortableDir "app"

@@ -69,6 +69,35 @@ foreach ($file in $sourceFiles) {
 }
 Write-Host "Archivos .py copiados: $copied" -ForegroundColor Green
 
+Write-Step "Copiando run.bat actualizado"
+Copy-Item -Force (Join-Path $SourceDir "run.bat") (Join-Path $PortableDir "run.bat")
+
+Write-Step "Asegurando ruta de app en Python embeddable"
+$pthFile = Get-ChildItem -Path (Join-Path $PortableDir "python") -Filter "python*._pth" | Select-Object -First 1
+if (!$pthFile) {
+    throw "No se encontro archivo python*._pth dentro de la carpeta python portable."
+}
+$pthContent = Get-Content $pthFile.FullName
+if (!($pthContent -contains "..\app")) {
+    $updatedPth = @()
+    $inserted = $false
+    foreach ($line in $pthContent) {
+        if (!$inserted -and ($line -eq "import site" -or $line -eq "#import site")) {
+            $updatedPth += "..\app"
+            $inserted = $true
+        }
+        if ($line -eq "#import site") {
+            $updatedPth += "import site"
+        } else {
+            $updatedPth += $line
+        }
+    }
+    if (!$inserted) {
+        $updatedPth += "..\app"
+    }
+    Set-Content -Path $pthFile.FullName -Value $updatedPth -Encoding ASCII
+}
+
 Write-Step "Validando estructura minima"
 $requiredPaths = @(
     "main.py",
@@ -91,7 +120,7 @@ $PythonExe = Join-Path $PortableDir "python\python.exe"
 if (Test-Path $PythonExe) {
     Push-Location $AppDir
     try {
-        & $PythonExe -c "import sys; sys.path.insert(0, r'.'); import services.windows_asyncio; import config; print('Imports OK')"
+        & $PythonExe -c "import services.windows_asyncio; import config; print('Imports OK')"
         if ($LASTEXITCODE -ne 0) {
             throw "Fallo la validacion de imports principales."
         }
