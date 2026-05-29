@@ -368,22 +368,42 @@ def _parse_row_datetime(row: dict[str, Any]) -> datetime | None:
         return None
 
 
-def _rows_to_frame(rows: list[dict[str, Any]]) -> Any:
-    import pandas as pd
-
+def _rows_to_frame(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     prepared: list[dict[str, Any]] = []
     for row in rows:
         dt = _parse_row_datetime(row)
         if dt is None:
             continue
         item = dict(row)
-        item['_dt'] = pd.Timestamp(dt)
+        item['_dt'] = dt
         prepared.append(item)
 
-    frame = pd.DataFrame(prepared)
-    if frame.empty:
-        return frame
-    return frame.sort_values('_dt')
+    return sorted(prepared, key=lambda item: item['_dt'])
+
+
+def _frame_empty(frame: Any) -> bool:
+    return not frame
+
+
+def _frame_has_key(frame: list[dict[str, Any]], key: str) -> bool:
+    return any(key in row and row.get(key) not in (None, '') for row in frame)
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ''):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _floor_datetime(dt: datetime, minutes: int) -> datetime:
+    if minutes == 1440:
+        return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    bucket = (dt.hour * 60 + dt.minute) // minutes * minutes
+    return dt.replace(hour=bucket // 60, minute=bucket % 60, second=0, microsecond=0)
 
 
 def _fmt_label(ts: Any) -> str:
@@ -414,33 +434,38 @@ def _tick_text(labels: list[str], minutes: int) -> list[str]:
 
 
 def _series_data(frame: Any, spec: ChartSpec, minutes: int) -> tuple[list[str], list[float | None]]:
-    import pandas as pd
-
     empty = ([''] * MAX_BARS, [None] * MAX_BARS)
-    if frame.empty or spec.key not in frame:
+    if _frame_empty(frame) or not _frame_has_key(frame, spec.key):
         return empty
 
-    df = frame[['_dt', spec.key]].copy()
-    df[spec.key] = pd.to_numeric(df[spec.key], errors='coerce')
-    df = df.dropna(subset=[spec.key])
-    if df.empty:
+    points = [
+        (row['_dt'], value)
+        for row in frame
+        if (value := _float_or_none(row.get(spec.key))) is not None
+    ]
+    if not points:
         return empty
 
     if minutes == SAMPLE_BASE_MIN:
-        take = df.tail(MAX_BARS)
-        labels = [_fmt_label(ts) for ts in take['_dt']]
-        values = [float(v) for v in take[spec.key]]
+        take = points[-MAX_BARS:]
+        labels = [_fmt_label(ts) for ts, _ in take]
+        values = [float(v) for _, v in take]
     else:
-        width = pd.Timedelta(minutes=minutes)
-        last_ts = df['_dt'].max()
-        df['_bin'] = df['_dt'].dt.floor(f'{minutes}min')
-        grouped = df.groupby('_bin')[spec.key].agg(['mean', 'count']).reset_index()
-        grouped = grouped[(grouped['_bin'] + width) <= last_ts]
+        last_ts = max(ts for ts, _ in points)
         required = max(1, math.ceil((minutes / SAMPLE_BASE_MIN) * spec.coverage))
-        grouped = grouped[grouped['count'] >= required]
-        take = grouped.tail(MAX_BARS)
-        labels = [_fmt_label(ts) for ts in take['_bin']]
-        values = [float(v) for v in take['mean']]
+        grouped: dict[datetime, list[float]] = {}
+        for ts, value in points:
+            bucket = _floor_datetime(ts, minutes)
+            if bucket + timedelta(minutes=minutes) <= last_ts:
+                grouped.setdefault(bucket, []).append(value)
+        series = [
+            (bucket, sum(values) / len(values))
+            for bucket, values in sorted(grouped.items())
+            if len(values) >= required
+        ]
+        take = series[-MAX_BARS:]
+        labels = [_fmt_label(ts) for ts, _ in take]
+        values = [float(v) for _, v in take]
 
     if spec.round_values:
         values = [round(v) if v is not None else None for v in values]
@@ -465,13 +490,11 @@ def _seconds_until_next_realtime_refresh(frame: Any | None) -> float:
     - desde ahí abrir una ventana de 2 min consultando cada 15 s;
     - si no aparece medición nueva en esa ventana, bajar a un retry liviano.
     """
-    if frame is None or getattr(frame, 'empty', True) or '_dt' not in frame:
+    if frame is None or _frame_empty(frame):
         return REALTIME_RETRY_SECONDS
 
     try:
-        last_dt = frame['_dt'].max()
-        if hasattr(last_dt, 'to_pydatetime'):
-            last_dt = last_dt.to_pydatetime()
+        last_dt = max(row['_dt'] for row in frame)
         if getattr(last_dt, 'tzinfo', None) is not None:
             last_dt = last_dt.replace(tzinfo=None)
         probe_start = last_dt + timedelta(minutes=SAMPLE_BASE_MIN, seconds=-REALTIME_PRECHECK_SECONDS)
@@ -548,7 +571,7 @@ async def _load_frame(device_id: str | None, limit: int = INITIAL_FETCH_LIMIT) -
         rows = await asyncio.to_thread(graph_rows_history, limit, device_id)
         return _rows_to_frame(rows), None
     except ModuleNotFoundError as exc:
-        missing = exc.name or 'plotly/pandas'
+        missing = exc.name or 'plotly'
         return None, f'Falta instalar el paquete Python: {missing}'
     except Exception as exc:
         return None, f'No se pudieron cargar las mediciones: {exc}'
@@ -609,7 +632,7 @@ def _graph_page(page_title: str, charts: list[ChartSpec]) -> None:
             plot_widgets[spec.key].update()
             update_active_buttons(spec)
         except ModuleNotFoundError as exc:
-            status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly/pandas"}')
+            status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly"}')
         except Exception as exc:
             status.set_text(f'No se pudo generar {spec.y_title}: {exc}')
 
@@ -729,30 +752,35 @@ def _interval_label(minutes: int) -> str:
 
 
 def _history_series_data(frame: Any, spec: ChartSpec, minutes: int) -> tuple[list[str], list[float], list[Any]]:
-    import pandas as pd
-
-    if frame.empty or spec.key not in frame:
+    if _frame_empty(frame) or not _frame_has_key(frame, spec.key):
         return [], [], []
 
-    df = frame[['_dt', spec.key]].copy()
-    df[spec.key] = pd.to_numeric(df[spec.key], errors='coerce')
-    df = df.dropna(subset=[spec.key])
-    if df.empty:
+    points = [
+        (row['_dt'], value)
+        for row in frame
+        if (value := _float_or_none(row.get(spec.key))) is not None
+    ]
+    if not points:
         return [], [], []
 
     if minutes == SAMPLE_BASE_MIN:
-        labels = [_fmt_label(ts) for ts in df['_dt']]
-        values = [float(v) for v in df[spec.key]]
-        times = list(df['_dt'])
+        labels = [_fmt_label(ts) for ts, _ in points]
+        values = [float(v) for _, v in points]
+        times = [ts for ts, _ in points]
     else:
-        rule = '1D' if minutes == 1440 else f'{minutes}min'
-        df['_bin'] = df['_dt'].dt.floor(rule)
-        grouped = df.groupby('_bin')[spec.key].agg(['mean', 'count']).reset_index()
         required = max(1, math.ceil((minutes / SAMPLE_BASE_MIN) * 0.90))
-        grouped = grouped[grouped['count'] >= required]
-        labels = [_fmt_label(ts) for ts in grouped['_bin']]
-        values = [float(v) for v in grouped['mean']]
-        times = list(grouped['_bin'])
+        grouped: dict[datetime, list[float]] = {}
+        for ts, value in points:
+            bucket = _floor_datetime(ts, minutes)
+            grouped.setdefault(bucket, []).append(value)
+        series = [
+            (bucket, sum(values) / len(values))
+            for bucket, values in sorted(grouped.items())
+            if len(values) >= required
+        ]
+        labels = [_fmt_label(ts) for ts, _ in series]
+        values = [float(v) for _, v in series]
+        times = [ts for ts, _ in series]
 
     if spec.round_values:
         values = [round(v) for v in values]
@@ -1049,15 +1077,15 @@ def history_graph() -> None:
             status.set_text('Cargando historial almacenado...')
             rows = await asyncio.to_thread(graph_rows_all, selected_device_id)
             frame_cache = _rows_to_frame(rows)
-            if frame_cache.empty:
+            if _frame_empty(frame_cache):
                 status.set_text('Historial local vacío. No hay registros almacenados para graficar.')
             else:
                 total = len(frame_cache)
-                last = frame_cache.iloc[-1]
+                last = frame_cache[-1]
                 status.set_text(f'Historial cargado. Registros: {total}. Última medición: {last["fecha"]} {last["hora"]}')
             await rebuild()
         except ModuleNotFoundError as exc:
-            status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly/pandas"}')
+            status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly"}')
         except Exception as exc:
             status.set_text(f'Error al cargar historial: {exc}')
 
