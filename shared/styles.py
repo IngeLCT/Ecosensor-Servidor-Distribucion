@@ -45,11 +45,12 @@ def add_styles() -> None:
             justify-content: center;
             gap: 14px;
             flex-wrap: nowrap;
+            margin-bottom: 12px;
         }
         .brand-name {
             color: #4a4d2f;
             font-size: 42px;
-            font-weight: 400;
+            font-weight: 700;
             line-height: 1;
             letter-spacing: normal;
             text-shadow: none;
