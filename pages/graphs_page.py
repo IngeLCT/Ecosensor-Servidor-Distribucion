@@ -569,9 +569,9 @@ def _graph_page(page_title: str, charts: list[ChartSpec]) -> None:
 
     with ui.element('div').classes('dashboard'):
         _nav()
-        with ui.column().classes('items-center justify-center gap-3'):
-            ui.label('LCT Didacticos').classes('brand-title')
+        with ui.element('div').classes('brand-header'):
             ui.image('/static/LCT.png').props('fit=contain no-spinner').classes('connect-logo')
+            ui.label('EcoSensor®').classes('brand-name')
         ui.label(page_title).classes('section-title')
         id_label = ui.label('ID: -').classes('section-title')
         status = ui.label('Cargando gráficas...').classes('status-line mt-3')
@@ -900,9 +900,9 @@ def history_graph() -> None:
 
     with ui.element('div').classes('dashboard'):
         _nav()
-        with ui.column().classes('items-center justify-center gap-3'):
-            ui.label('LCT Didacticos').classes('brand-title')
+        with ui.element('div').classes('brand-header'):
             ui.image('/static/LCT.png').props('fit=contain no-spinner').classes('connect-logo')
+            ui.label('EcoSensor®').classes('brand-name')
         ui.label('Gráficas del Historial').classes('section-title')
         status = ui.label('Cargando historial...').classes('status-line mt-3')
 

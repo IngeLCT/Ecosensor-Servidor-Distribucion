@@ -39,11 +39,27 @@ def add_styles() -> None:
             font-weight: 700;
             line-height: 1.1;
         }
+        .brand-header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            flex-wrap: nowrap;
+        }
+        .brand-name {
+            color: #fff;
+            font-size: 42px;
+            font-weight: 900;
+            line-height: 1;
+            letter-spacing: -0.03em;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, .35);
+            white-space: nowrap;
+        }
         .connect-logo {
-            width: 90px !important;
-            height: 90px !important;
-            max-width: 90px;
-            max-height: 90px;
+            width: 110px !important;
+            height: 110px !important;
+            max-width: 110px;
+            max-height: 110px;
             overflow: visible;
         }
         
@@ -200,7 +216,9 @@ def add_styles() -> None:
         }
         @media (max-width: 760px) {
             .connect-title { font-size: 30px; }
-            .connect-logo { width: 104px; height: 104px; }
+            .brand-header { gap: 10px; }
+            .brand-name { font-size: 34px; }
+            .connect-logo { width: 88px !important; height: 88px !important; }
             .connect-subtitle { font-size: 23px; }
             .thumbs { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
             .measure-table th,

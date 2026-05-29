@@ -33,9 +33,9 @@ def dashboard() -> None:
             ui.link('Gráficas del Historial', '/graficas/historial')
             ui.label('|')
 
-        with ui.column().classes('items-center justify-center gap-3'):
-            ui.label('LCT Didacticos').classes('brand-title')
+        with ui.element('div').classes('brand-header'):
             ui.image('/static/LCT.png').props('fit=contain no-spinner').classes('connect-logo')
+            ui.label('EcoSensor®').classes('brand-name')
 
         ui.label('Mediciones Ambientales').classes('section-title')
         with ui.row().classes('items-center justify-center gap-3 history-controls'):
