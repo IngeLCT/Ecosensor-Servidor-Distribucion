@@ -49,10 +49,10 @@ def add_styles() -> None:
         .brand-name {
             color: #4a4d2f;
             font-size: 42px;
-            font-weight: 900;
+            font-weight: 400;
             line-height: 1;
-            letter-spacing: -0.03em;
-            text-shadow: 0 2px 4px rgba(0, 0, 0, .35);
+            letter-spacing: normal;
+            text-shadow: none;
             white-space: nowrap;
         }
         .connect-logo {
