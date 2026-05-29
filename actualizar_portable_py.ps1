@@ -47,32 +47,60 @@ if (!(Test-Path $AppDir)) {
     throw "No existe la app portable: $AppDir. Primero crea el portable con crear_portable.ps1"
 }
 
-Write-Step "Deteniendo actualizacion si el servidor portable esta abierto"
+Write-Step "Aviso"
 Write-Host "Si el servidor portable esta ejecutandose, cierralo antes de continuar." -ForegroundColor Yellow
 
-Write-Step "Eliminando archivos .py anteriores en la app portable"
-Get-ChildItem -Path $AppDir -Recurse -File -Filter "*.py" |
-    Where-Object { !(Test-IsExcludedPath $_.FullName $AppDir) } |
-    Remove-Item -Force
-
 Write-Step "Copiando archivos .py actualizados"
-$sourceFiles = Get-ChildItem -Path $SourceDir -Recurse -File -Filter "*.py" |
-    Where-Object { !(Test-IsExcludedPath $_.FullName $SourceDir) }
+$sourceFiles = Get-ChildItem -Path $SourceDir -Recurse -Filter "*.py" |
+    Where-Object { !$_.PSIsContainer -and !(Test-IsExcludedPath $_.FullName $SourceDir) }
 
+if (!$sourceFiles -or $sourceFiles.Count -eq 0) {
+    throw "No se encontraron archivos .py en SourceDir: $SourceDir"
+}
+
+$copied = 0
 foreach ($file in $sourceFiles) {
     $relative = Get-RelativePathCompat $SourceDir $file.FullName
     $dest = Join-Path $AppDir $relative
     $destDir = Split-Path -Parent $dest
     New-Item -ItemType Directory -Force -Path $destDir | Out-Null
     Copy-Item -Force $file.FullName $dest
+    $copied += 1
+}
+Write-Host "Archivos .py copiados: $copied" -ForegroundColor Green
+
+Write-Step "Validando estructura minima"
+$requiredPaths = @(
+    "main.py",
+    "config.py",
+    "services\__init__.py",
+    "services\windows_asyncio.py",
+    "pages\__init__.py",
+    "shared\__init__.py",
+    "storage\__init__.py"
+)
+foreach ($required in $requiredPaths) {
+    $full = Join-Path $AppDir $required
+    if (!(Test-Path $full)) {
+        throw "Falta archivo requerido en portable: $full"
+    }
 }
 
-Write-Step "Validando sintaxis con Python portable si esta disponible"
+Write-Step "Validando import principal con Python portable"
 $PythonExe = Join-Path $PortableDir "python\python.exe"
 if (Test-Path $PythonExe) {
-    & $PythonExe -m compileall -q $AppDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "Fallo la validacion de sintaxis de los .py copiados."
+    Push-Location $AppDir
+    try {
+        & $PythonExe -c "import sys; sys.path.insert(0, r'.'); import services.windows_asyncio; import config; print('Imports OK')"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Fallo la validacion de imports principales."
+        }
+        & $PythonExe -m compileall -q $AppDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "Fallo la validacion de sintaxis de los .py copiados."
+        }
+    } finally {
+        Pop-Location
     }
     Write-Host "Sintaxis OK" -ForegroundColor Green
 } else {
