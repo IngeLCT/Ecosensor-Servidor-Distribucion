@@ -30,9 +30,11 @@ O por mDNS si la red lo permite:
 Datos de la aplicacion
 ----------------------
 
-La app guarda datos en:
+La app guarda datos dentro de la carpeta portable:
 
-    %LOCALAPPDATA%\EcoSensor Servidor
+    EcoSensorServidorPortable\app\data
+
+Opcionalmente puedes forzar otra ruta con la variable de entorno ECOSENSOR_DATA_DIR.
 
 Ahi se guardan:
 

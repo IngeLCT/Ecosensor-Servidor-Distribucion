@@ -5,11 +5,8 @@ APP_NAME = 'EcoSensor Servidor'
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / 'static'
 
-_LOCALAPPDATA = os.getenv('LOCALAPPDATA')
-if _LOCALAPPDATA:
-    DATA_DIR = Path(_LOCALAPPDATA) / APP_NAME
-else:
-    DATA_DIR = APP_DIR / 'data'
+_DATA_DIR_OVERRIDE = os.getenv('ECOSENSOR_DATA_DIR')
+DATA_DIR = Path(_DATA_DIR_OVERRIDE) if _DATA_DIR_OVERRIDE else APP_DIR / 'data'
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault('NICEGUI_STORAGE_PATH', str(DATA_DIR / '.nicegui'))

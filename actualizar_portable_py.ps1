@@ -10,8 +10,23 @@ function Write-Step($text) {
     Write-Host "==> $text" -ForegroundColor Cyan
 }
 
+function Get-RelativePathCompat($Root, $Path) {
+    $rootFull = [System.IO.Path]::GetFullPath($Root)
+    $pathFull = [System.IO.Path]::GetFullPath($Path)
+
+    if (!$rootFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $rootFull = $rootFull + [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    $rootUri = New-Object System.Uri($rootFull)
+    $pathUri = New-Object System.Uri($pathFull)
+    $relativeUri = $rootUri.MakeRelativeUri($pathUri)
+    $relative = [System.Uri]::UnescapeDataString($relativeUri.ToString())
+    return $relative -replace '/', [System.IO.Path]::DirectorySeparatorChar
+}
+
 function Test-IsExcludedPath($Path, $Root) {
-    $relative = [System.IO.Path]::GetRelativePath($Root, $Path)
+    $relative = Get-RelativePathCompat $Root $Path
     $parts = $relative -split '[\\/]+'
     $excludedDirs = @('.git', '.venv', 'venv', 'env', '__pycache__', 'build', 'dist', 'data', 'output', 'installer')
     foreach ($part in $parts) {
@@ -45,7 +60,7 @@ $sourceFiles = Get-ChildItem -Path $SourceDir -Recurse -File -Filter "*.py" |
     Where-Object { !(Test-IsExcludedPath $_.FullName $SourceDir) }
 
 foreach ($file in $sourceFiles) {
-    $relative = [System.IO.Path]::GetRelativePath($SourceDir, $file.FullName)
+    $relative = Get-RelativePathCompat $SourceDir $file.FullName
     $dest = Join-Path $AppDir $relative
     $destDir = Split-Path -Parent $dest
     New-Item -ItemType Directory -Force -Path $destDir | Out-Null
