@@ -1,7 +1,7 @@
 param(
     [string]$PortableDir = "C:\Users\kyo_a\Documents\EduardoRamos\Python\EcoSensorServidorPortable",
     [string]$SourceDir = "C:\Users\kyo_a\Documents\EduardoRamos\Python\Ecosensor-Servidor-Distribucion",
-    [string]$PythonZip = "C:\Users\kyo_a\Downloads\python-3.12.10-embed-amd64.zip"
+    [string]$PythonZip = "C:\Users\kyo_a\Downloads\python-3.11.9-embed-amd64.zip"
 )
 
 $ErrorActionPreference = "Stop"
