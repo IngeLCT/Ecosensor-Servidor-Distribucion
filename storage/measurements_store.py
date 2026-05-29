@@ -7,7 +7,7 @@ from typing import Any
 from config import DATA_DIR, MEASUREMENTS_DB_FILE
 
 
-TIMESTAMP_DRIFT_TOLERANCE_SECONDS = 10 * 60
+TIMESTAMP_DRIFT_TOLERANCE_SECONDS = 15 * 60
 
 
 SCHEMA = '''
@@ -416,7 +416,7 @@ def repair_future_estimated_timestamps(device_id: str | None = None) -> int:
 
     La hora del EcoSensor puede quedar marcada como válida aunque esté adelantada
     o atrasada. Durante sincronización/consulta, si la diferencia entre
-    device_timestamp y la hora de recepción del servidor supera ±10 minutos, se
+    device_timestamp y la hora de recepción del servidor supera ±15 minutos, se
     reemplaza por received_at local y se marca como corregida.
     """
     ensure_db(device_id)

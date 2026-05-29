@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
-TIME_DRIFT_SYNC_THRESHOLD_SECONDS = 10 * 60
+TIME_DRIFT_SYNC_THRESHOLD_SECONDS = 15 * 60
 
 
 def normalize_host_input(value: str) -> str:
