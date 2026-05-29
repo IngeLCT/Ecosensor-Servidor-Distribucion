@@ -37,7 +37,7 @@ def dashboard() -> None:
             ui.image('/static/LCT.png').props('fit=contain no-spinner').classes('connect-logo')
             ui.label('EcoSensor®').classes('brand-name')
 
-        ui.label('Mediciones Ambientales').classes('section-title')
+        ui.label('Mediciones Ambientales').classes('section-title dashboard-main-title')
         with ui.row().classes('items-center justify-center gap-3 history-controls'):
             ui.label('ID:').classes('section-title')
             sensor_select = ui.select({}, value=None).props('outlined dense').classes('w-64 device-select')

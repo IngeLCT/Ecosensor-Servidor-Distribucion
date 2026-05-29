@@ -151,6 +151,9 @@ def add_styles() -> None:
             font-weight: 700;
             text-decoration: underline;
         }
+        .dashboard-main-title {
+            margin-bottom: 12px;
+        }
         .device-select .q-field__control {
             min-height: 48px;
             background: rgba(255, 255, 255, .72);
