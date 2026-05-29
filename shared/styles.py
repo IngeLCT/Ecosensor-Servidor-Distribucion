@@ -41,13 +41,13 @@ def add_styles() -> None:
         }
         .brand-header {
             display: flex;
-            align-items: center;
+            align-items: flex-end;
             justify-content: center;
             gap: 14px;
             flex-wrap: nowrap;
         }
         .brand-name {
-            color: #fff;
+            color: #4a4d2f;
             font-size: 42px;
             font-weight: 900;
             line-height: 1;
