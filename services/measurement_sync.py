@@ -24,9 +24,11 @@ from storage.measurements_store import (
 
 _sync_locks: dict[str, asyncio.Lock] = {}
 _synced_notice_printed: set[str] = set()
-SYNC_CHUNK_SIZE = 25
+SYNC_CHUNK_SIZE = 15
 SYNC_MAX_BATCHES_PER_CYCLE = 300
 SYNC_PROGRESS_INTERVAL_SECONDS = 60.0
+SYNC_BLOCK_RETRY_DELAY_SECONDS = 60.0
+SYNC_BLOCK_MAX_RETRIES = 1
 PUSH_HOST_GRACE_SECONDS = 120
 DEFAULT_MEASUREMENT_WINDOW_SECONDS = 300
 
@@ -455,12 +457,46 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                             last_progress_print = now_progress
 
                         if not ok and not rows:
-                            print(
-                                f"[measurement_sync] {selected_device_id}: bloque sin progreso "
-                                f"range={chunk_from}-{chunk_to} response={summarize_response(missing)}",
-                                flush=True,
-                            )
-                            break
+                            retry_success = False
+                            for retry in range(1, SYNC_BLOCK_MAX_RETRIES + 1):
+                                print(
+                                    f"[measurement_sync] {selected_device_id}: bloque sin progreso "
+                                    f"range={chunk_from}-{chunk_to} response={summarize_response(missing)}; "
+                                    f"reintentando en {int(SYNC_BLOCK_RETRY_DELAY_SECONDS)}s "
+                                    f"({retry}/{SYNC_BLOCK_MAX_RETRIES})",
+                                    flush=True,
+                                )
+                                await asyncio.sleep(SYNC_BLOCK_RETRY_DELAY_SECONDS)
+                                missing = await fetch_readings_range(
+                                    host_now,
+                                    from_id=chunk_from,
+                                    to_id=chunk_to,
+                                    limit=SYNC_CHUNK_SIZE,
+                                    timeout=30.0,
+                                )
+                                missing_data = missing.get('data') if isinstance(missing.get('data'), dict) else None
+                                rows = missing_data.get('rows') if isinstance(missing_data, dict) else None
+                                rows = rows if isinstance(rows, list) else []
+                                ok = bool(missing.get('ok'))
+                                if rows:
+                                    inserted_count, min_seen_source_id, max_seen_source_id = await _save_remote_rows(
+                                        host_now,
+                                        selected_device_id,
+                                        rows,
+                                        missing_data.get('current_uptime_s') if isinstance(missing_data, dict) else None,
+                                        missing_data.get('boot_id') if isinstance(missing_data, dict) else None,
+                                    )
+                                    total_inserted += inserted_count
+                                    total_received += len(rows)
+                                    retry_success = True
+                                    break
+                            if not retry_success and not ok and not rows:
+                                print(
+                                    f"[measurement_sync] {selected_device_id}: bloque sin progreso definitivo "
+                                    f"range={chunk_from}-{chunk_to} response={summarize_response(missing)}",
+                                    flush=True,
+                                )
+                                break
                         chunk_to = chunk_from - 1
 
                     if batches >= SYNC_MAX_BATCHES_PER_CYCLE:
