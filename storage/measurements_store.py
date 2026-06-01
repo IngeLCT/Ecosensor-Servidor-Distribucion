@@ -201,7 +201,13 @@ def get_latest_measurement(device_id: str | None = None) -> dict[str, Any] | Non
                    pm1p0, pm2p5, pm4p0, pm10p0,
                    voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum, window_s
             FROM measurements
-            ORDER BY received_at DESC, id DESC
+            ORDER BY
+                COALESCE(
+                    datetime(replace(replace(substr(device_timestamp, 1, 19), 'T', ' '), 'Z', '')),
+                    datetime(replace(replace(substr(received_at, 1, 19), 'T', ' '), 'Z', ''))
+                ) DESC,
+                COALESCE(source_id, id) DESC,
+                id DESC
             LIMIT 1
             '''
         ).fetchone()
