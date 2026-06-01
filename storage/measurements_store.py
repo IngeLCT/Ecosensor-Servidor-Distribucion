@@ -436,11 +436,14 @@ def _is_invalid_historical_time(row: sqlite3.Row) -> bool:
 def repair_historical_invalid_timestamps(device_id: str | None = None) -> int:
     """Reconstruye horas históricas inválidas usando la siguiente medición válida.
 
-    Si una corrida de IDs históricos no tiene fecha/hora válida, no se usa la
-    hora de recepción del servidor. Se toma la siguiente medición válida por
-    source_id, se resta window_s (5 min por defecto) para el ID anterior, y se
-    continúa hacia atrás. Si la reconstrucción chocaría con la medición válida
-    anterior, se detiene para no solapar el orden cronológico.
+    No usa la hora de recepción del servidor para historial. Detecta dos casos:
+    1) filas marcadas como inválidas/estimadas;
+    2) filas con fecha aparentemente válida pero imposible por el orden de IDs,
+       por ejemplo un ID con fecha posterior a otra medición futura.
+
+    Para cada corrida sospechosa, toma la siguiente medición no sospechosa como
+    ancla, resta window_s (5 min por defecto) para el ID anterior y continúa
+    hacia atrás sin solaparse con la medición válida previa.
     """
     ensure_db(device_id)
     repaired = 0
@@ -454,26 +457,45 @@ def repair_historical_invalid_timestamps(device_id: str | None = None) -> int:
             ORDER BY source_id ASC, id ASC
             '''
         ).fetchall()
+        if not rows:
+            return 0
+
+        parsed_times = [_parse_timestamp_local(row['device_timestamp']) for row in rows]
+        future_min: list[datetime | None] = [None] * len(rows)
+        current_min: datetime | None = None
+        for pos in range(len(rows) - 1, -1, -1):
+            future_min[pos] = current_min
+            parsed = parsed_times[pos]
+            if parsed is not None and (current_min is None or parsed < current_min):
+                current_min = parsed
+
+        suspicious: list[bool] = []
+        for pos, row in enumerate(rows):
+            parsed = parsed_times[pos]
+            invalid = _is_invalid_historical_time(row) or parsed is None
+            chronologically_impossible = (
+                parsed is not None
+                and future_min[pos] is not None
+                and parsed >= future_min[pos]
+            )
+            suspicious.append(invalid or chronologically_impossible)
 
         index = 0
         previous_valid_dt: datetime | None = None
         while index < len(rows):
-            row = rows[index]
-            invalid = _is_invalid_historical_time(row)
-            parsed = _parse_timestamp_local(row['device_timestamp']) if not invalid else None
-            if not invalid and parsed is not None:
-                previous_valid_dt = parsed
+            if not suspicious[index]:
+                previous_valid_dt = parsed_times[index]
                 index += 1
                 continue
 
             run_start = index
-            while index < len(rows) and _is_invalid_historical_time(rows[index]):
+            while index < len(rows) and suspicious[index]:
                 index += 1
             run = rows[run_start:index]
             if not run or index >= len(rows):
                 continue
 
-            next_valid_dt = _parse_timestamp_local(rows[index]['device_timestamp'])
+            next_valid_dt = parsed_times[index]
             if next_valid_dt is None:
                 continue
 
