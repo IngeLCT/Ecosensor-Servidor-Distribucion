@@ -14,7 +14,13 @@ from services.device_registry import (
 )
 from services.esp_client import build_endpoints, configure_push_host, fetch_json, fetch_readings_range, sync_time_if_needed
 from shared.formatters import row_from_payload
-from storage.measurements_store import get_latest_measurement, latest_source_id, missing_source_id_ranges, save_measurement
+from storage.measurements_store import (
+    get_latest_measurement,
+    latest_source_id,
+    missing_source_id_ranges,
+    repair_historical_invalid_timestamps,
+    save_measurement,
+)
 
 _sync_locks: dict[str, asyncio.Lock] = {}
 _synced_notice_printed: set[str] = set()
@@ -197,8 +203,19 @@ async def _save_remote_rows(
         item['device_id'] = device_id
         item['id'] = device_id
         item['measurement_id'] = source_id
-        _enrich_time_metadata(item, current_uptime_s, server_now, current_boot_id)
-        if not item.get('timestamp'):
+
+        historical_row = source_id_int > 0
+        historical_time_valid = _bool_or_none(item.get('time_valid'))
+        if historical_row and not historical_time_valid:
+            # En histórico no estimamos con la hora actual del servidor. Estas
+            # filas se reconstruyen después por source_id usando la siguiente
+            # medición válida como ancla.
+            item['time_valid'] = False
+            item['time_source'] = item.get('time_source') or 'invalid_history_time'
+        else:
+            _enrich_time_metadata(item, current_uptime_s, server_now, current_boot_id)
+
+        if not item.get('timestamp') and not historical_row:
             window_s = item.get('window_s') or 300
             try:
                 step = max(1, int(window_s))
@@ -214,6 +231,9 @@ async def _save_remote_rows(
             item['time_source'] = 'estimated_sequence'
         if await asyncio.to_thread(save_measurement, host, item):
             inserted_count += 1
+
+    if max_seen_source_id > 0:
+        await asyncio.to_thread(repair_historical_invalid_timestamps, device_id)
 
     return inserted_count, min_seen_source_id, max_seen_source_id
 

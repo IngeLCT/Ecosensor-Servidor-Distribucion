@@ -192,6 +192,7 @@ def _measurement_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
 def get_latest_measurement(device_id: str | None = None) -> dict[str, Any] | None:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
+    repair_historical_invalid_timestamps(device_id)
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
@@ -331,6 +332,7 @@ def _graph_row(row: sqlite3.Row) -> dict[str, Any]:
 def graph_latest_row(device_id: str | None = None) -> dict[str, Any] | None:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
+    repair_historical_invalid_timestamps(device_id)
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
@@ -355,6 +357,7 @@ def graph_latest_row(device_id: str | None = None) -> dict[str, Any] | None:
 def graph_rows_history(limit: int = 5000, device_id: str | None = None) -> list[dict[str, Any]]:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
+    repair_historical_invalid_timestamps(device_id)
     limit = max(1, min(20000, int(limit)))
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
@@ -381,6 +384,7 @@ def graph_rows_history(limit: int = 5000, device_id: str | None = None) -> list[
 def graph_rows_all(device_id: str | None = None) -> list[dict[str, Any]]:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
+    repair_historical_invalid_timestamps(device_id)
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -398,6 +402,7 @@ def graph_rows_all(device_id: str | None = None) -> list[dict[str, Any]]:
 def graph_rows_since(row_id: int, limit: int = 500, device_id: str | None = None) -> list[dict[str, Any]]:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
+    repair_historical_invalid_timestamps(device_id)
     row_id = max(0, int(row_id))
     limit = max(1, min(20000, int(limit)))
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
@@ -415,6 +420,89 @@ def graph_rows_since(row_id: int, limit: int = 500, device_id: str | None = None
             (row_id, limit),
         ).fetchall()
     return [_graph_row(row) for row in rows]
+
+
+def _is_invalid_historical_time(row: sqlite3.Row) -> bool:
+    if row['source_id'] is None:
+        return False
+    source = str(row['time_source'] or '').lower()
+    if row['time_valid'] == 0:
+        return True
+    if source.startswith('estimated') or 'drift_corrected' in source or source == 'backfilled_from_next_valid':
+        return True
+    return not str(row['device_timestamp'] or '').strip()
+
+
+def repair_historical_invalid_timestamps(device_id: str | None = None) -> int:
+    """Reconstruye horas históricas inválidas usando la siguiente medición válida.
+
+    Si una corrida de IDs históricos no tiene fecha/hora válida, no se usa la
+    hora de recepción del servidor. Se toma la siguiente medición válida por
+    source_id, se resta window_s (5 min por defecto) para el ID anterior, y se
+    continúa hacia atrás. Si la reconstrucción chocaría con la medición válida
+    anterior, se detiene para no solapar el orden cronológico.
+    """
+    ensure_db(device_id)
+    repaired = 0
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            '''
+            SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+            FROM measurements
+            WHERE source_id IS NOT NULL
+            ORDER BY source_id ASC, id ASC
+            '''
+        ).fetchall()
+
+        index = 0
+        previous_valid_dt: datetime | None = None
+        while index < len(rows):
+            row = rows[index]
+            invalid = _is_invalid_historical_time(row)
+            parsed = _parse_timestamp_local(row['device_timestamp']) if not invalid else None
+            if not invalid and parsed is not None:
+                previous_valid_dt = parsed
+                index += 1
+                continue
+
+            run_start = index
+            while index < len(rows) and _is_invalid_historical_time(rows[index]):
+                index += 1
+            run = rows[run_start:index]
+            if not run or index >= len(rows):
+                continue
+
+            next_valid_dt = _parse_timestamp_local(rows[index]['device_timestamp'])
+            if next_valid_dt is None:
+                continue
+
+            cursor = next_valid_dt
+            updates: list[tuple[str, str, int]] = []
+            for invalid_row in reversed(run):
+                try:
+                    step = max(1, int(invalid_row['window_s'] or 300))
+                except (TypeError, ValueError):
+                    step = 300
+                candidate = cursor - timedelta(seconds=step)
+                if previous_valid_dt is not None and candidate <= previous_valid_dt:
+                    break
+                updates.append((candidate.isoformat(timespec='seconds'), 'backfilled_from_next_valid', invalid_row['id']))
+                cursor = candidate
+
+            for timestamp, source, row_id in updates:
+                conn.execute(
+                    '''
+                    UPDATE measurements
+                    SET device_timestamp = ?, time_valid = 0, time_source = ?
+                    WHERE id = ?
+                    ''',
+                    (timestamp, source, row_id),
+                )
+                repaired += 1
+
+        conn.commit()
+    return repaired
 
 
 def repair_future_estimated_timestamps(device_id: str | None = None) -> int:
@@ -468,6 +556,7 @@ def repair_future_estimated_timestamps(device_id: str | None = None) -> int:
 def measurements_csv_text(device_id: str | None = None) -> str:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
+    repair_historical_invalid_timestamps(device_id)
     output = io.StringIO()
     fieldnames = [
         'id', 'device_id', 'Fecha de medicion', 'Hora de medicion',
