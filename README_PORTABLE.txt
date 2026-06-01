@@ -5,12 +5,14 @@ Uso recomendado
 ---------------
 
 1. La primera vez:
- - Clic derecho sobre run.bat
- - Ejecutar como administrador
- - Esto permite crear/verificar la regla de Firewall para el puerto TCP 8765.
+ - Ejecuta config.bat
+ - Acepta los permisos de administrador cuando Windows los solicite
+ - Esto permite crear/verificar la regla de Firewall para el puerto TCP 8765
+ - Tambien crea el acceso directo EcoSensor Servidor en el escritorio
 
 2. Las siguientes veces:
- - Doble clic normal sobre run.bat.
+ - Doble clic normal sobre run.bat
+ - O usa el acceso directo EcoSensor Servidor del escritorio
 
 Direccion para acceder a la Aplicacion Web
 ------------------------------------------
@@ -24,4 +26,5 @@ Notas
 
 - No mover ni borrar la carpeta python.
 - No mover ni borrar la carpeta app.
-- Si el firewall bloquea conexiones desde otros equipos, ejecuta run.bat como administrador una vez.
+- No mover ni borrar run.bat ni config.bat.
+- Si el firewall bloquea conexiones desde otros equipos, ejecuta config.bat una vez.

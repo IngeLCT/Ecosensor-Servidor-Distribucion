@@ -64,7 +64,7 @@ $excludeDirs = @(
     ".git", ".venv", "venv", "env", "__pycache__", "build", "dist", "data", "output", "installer"
 )
 $excludeFiles = @(
-    "*.pyc", "*.pyo", "*.spec", "*.log", "*.tmp", "*.bak", "*.exe"
+    "*.pyc", "*.pyo", "*.spec", "*.log", "*.tmp", "*.bak", "*.exe", "*.bat", "README_PORTABLE.txt"
 )
 
 $robocopyArgs = @(
@@ -83,7 +83,8 @@ if ($LASTEXITCODE -ge 8) {
     throw "Robocopy fallo con codigo $LASTEXITCODE"
 }
 
-Write-Step "Copiando run.bat y README_PORTABLE.txt a la raiz portable"
+Write-Step "Copiando config.bat, run.bat y README_PORTABLE.txt a la raiz portable"
+Copy-Item -Force (Join-Path $SourceDir "config.bat") (Join-Path $PortableDir "config.bat")
 Copy-Item -Force (Join-Path $SourceDir "run.bat") (Join-Path $PortableDir "run.bat")
 Copy-Item -Force (Join-Path $SourceDir "README_PORTABLE.txt") (Join-Path $PortableDir "README.txt")
 
@@ -127,6 +128,7 @@ Write-Host ""
 Write-Host "Portable creado correctamente en:" -ForegroundColor Green
 Write-Host "  $PortableDir" -ForegroundColor Green
 Write-Host ""
-Write-Host "Primera ejecucion recomendada:" -ForegroundColor Yellow
-Write-Host "  Clic derecho en run.bat > Ejecutar como administrador"
+Write-Host "Primera configuracion recomendada:" -ForegroundColor Yellow
+Write-Host "  Doble clic en config.bat y acepta permisos de administrador"
+Write-Host "Despues ejecuta el servidor con run.bat o desde el acceso directo del escritorio"
 Write-Host ""

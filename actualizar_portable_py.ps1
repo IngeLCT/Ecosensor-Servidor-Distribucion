@@ -69,7 +69,8 @@ foreach ($file in $sourceFiles) {
 }
 Write-Host "Archivos .py copiados: $copied" -ForegroundColor Green
 
-Write-Step "Copiando run.bat actualizado"
+Write-Step "Copiando config.bat y run.bat actualizados"
+Copy-Item -Force (Join-Path $SourceDir "config.bat") (Join-Path $PortableDir "config.bat")
 Copy-Item -Force (Join-Path $SourceDir "run.bat") (Join-Path $PortableDir "run.bat")
 
 Write-Step "Copiando README.txt actualizado"
@@ -143,4 +144,5 @@ Write-Host ""
 Write-Host "Archivos .py actualizados correctamente en:" -ForegroundColor Green
 Write-Host "  $AppDir" -ForegroundColor Green
 Write-Host ""
-Write-Host "Puedes iniciar de nuevo el portable con run.bat" -ForegroundColor Yellow
+Write-Host "Si es la primera vez, ejecuta config.bat para firewall y acceso directo." -ForegroundColor Yellow
+Write-Host "Despues puedes iniciar el portable con run.bat." -ForegroundColor Yellow
