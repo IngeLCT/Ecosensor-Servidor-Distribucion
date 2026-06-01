@@ -192,7 +192,6 @@ def _measurement_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
 def get_latest_measurement(device_id: str | None = None) -> dict[str, Any] | None:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
-    repair_historical_invalid_timestamps(device_id)
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
@@ -332,7 +331,6 @@ def _graph_row(row: sqlite3.Row) -> dict[str, Any]:
 def graph_latest_row(device_id: str | None = None) -> dict[str, Any] | None:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
-    repair_historical_invalid_timestamps(device_id)
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
@@ -357,7 +355,6 @@ def graph_latest_row(device_id: str | None = None) -> dict[str, Any] | None:
 def graph_rows_history(limit: int = 5000, device_id: str | None = None) -> list[dict[str, Any]]:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
-    repair_historical_invalid_timestamps(device_id)
     limit = max(1, min(20000, int(limit)))
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
@@ -384,7 +381,6 @@ def graph_rows_history(limit: int = 5000, device_id: str | None = None) -> list[
 def graph_rows_all(device_id: str | None = None) -> list[dict[str, Any]]:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
-    repair_historical_invalid_timestamps(device_id)
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -402,7 +398,6 @@ def graph_rows_all(device_id: str | None = None) -> list[dict[str, Any]]:
 def graph_rows_since(row_id: int, limit: int = 500, device_id: str | None = None) -> list[dict[str, Any]]:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
-    repair_historical_invalid_timestamps(device_id)
     row_id = max(0, int(row_id))
     limit = max(1, min(20000, int(limit)))
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
@@ -578,7 +573,6 @@ def repair_future_estimated_timestamps(device_id: str | None = None) -> int:
 def measurements_csv_text(device_id: str | None = None) -> str:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
-    repair_historical_invalid_timestamps(device_id)
     output = io.StringIO()
     fieldnames = [
         'id', 'device_id', 'Fecha de medicion', 'Hora de medicion',

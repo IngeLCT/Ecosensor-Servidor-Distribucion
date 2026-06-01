@@ -24,6 +24,7 @@ from storage.measurements_store import (
 
 _sync_locks: dict[str, asyncio.Lock] = {}
 _synced_notice_printed: set[str] = set()
+_history_syncing_devices: set[str] = set()
 SYNC_CHUNK_SIZE = 15
 SYNC_MAX_BATCHES_PER_CYCLE = 300
 SYNC_PROGRESS_INTERVAL_SECONDS = 60.0
@@ -45,6 +46,12 @@ def summarize_response(response: dict[str, Any] | None) -> dict[str, Any]:
 
 def record_sync_event(device_id: str, event: str, **details: Any) -> dict[str, Any]:
     return {'device_id': device_id, 'event': event, **details}
+
+
+def is_history_syncing(device_id: str | None = None) -> bool:
+    if device_id:
+        return device_id in _history_syncing_devices
+    return bool(_history_syncing_devices)
 
 
 def _lock_for(device_id: str) -> asyncio.Lock:
@@ -234,9 +241,6 @@ async def _save_remote_rows(
         if await asyncio.to_thread(save_measurement, host, item):
             inserted_count += 1
 
-    if max_seen_source_id > 0:
-        await asyncio.to_thread(repair_historical_invalid_timestamps, device_id)
-
     return inserted_count, min_seen_source_id, max_seen_source_id
 
 
@@ -397,6 +401,7 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
             # Recuperación de histórico por rangos faltantes concretos.
             # Se recorre de IDs altos a bajos para rellenar primero lo más reciente.
             if missing_ranges:
+                _history_syncing_devices.add(selected_device_id)
                 for range_start, range_end in reversed(missing_ranges):
                     chunk_to = range_end
                     while chunk_to >= range_start and batches < SYNC_MAX_BATCHES_PER_CYCLE:
@@ -503,6 +508,15 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                         break
 
                 completed_history_sync = batches < SYNC_MAX_BATCHES_PER_CYCLE
+                final_pending_after_fetch = max(0, pending_count - min(total_received, pending_count))
+                if completed_history_sync and final_pending_after_fetch == 0:
+                    repaired_count = await asyncio.to_thread(repair_historical_invalid_timestamps, selected_device_id)
+                    if repaired_count:
+                        print(
+                            f"[measurement_sync] {selected_device_id}: fechas historicas reparadas: {repaired_count}",
+                            flush=True,
+                        )
+                _history_syncing_devices.discard(selected_device_id)
                 record_sync_event(
                     selected_device_id,
                     'fetch_range_summary',
@@ -518,6 +532,13 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                 )
             else:
                 completed_history_sync = True
+                if sync_history:
+                    repaired_count = await asyncio.to_thread(repair_historical_invalid_timestamps, selected_device_id)
+                    if repaired_count:
+                        print(
+                            f"[measurement_sync] {selected_device_id}: fechas historicas reparadas: {repaired_count}",
+                            flush=True,
+                        )
                 record_sync_event(
                     selected_device_id,
                     'fetch_history_skipped',

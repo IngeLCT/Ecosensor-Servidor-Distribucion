@@ -17,7 +17,7 @@ from fastapi import Query, Request
 from fastapi.responses import JSONResponse, Response
 from nicegui import app, ui
 from services.device_registry import active_devices, mark_device_seen, probe_failures, remember_host
-from services.measurement_sync import background_sync_loop
+from services.measurement_sync import background_sync_loop, is_history_syncing
 from services.mdns_service import start_mdns_service
 from shared.formatters import row_from_payload
 from storage.measurements_store import graph_latest_row, graph_rows_history, graph_rows_since, measurements_csv_text, save_measurement
@@ -115,6 +115,15 @@ async def api_measurements_push(request: Request) -> JSONResponse:
 @app.get('/api/measurements.csv')
 def download_measurements_csv(device_id: str | None = Query(default=None)) -> Response:
     filename_id = (device_id or 'ecosensor01').strip() or 'ecosensor01'
+    if is_history_syncing(filename_id):
+        return Response(
+            content=(
+                'La sincronizacion de historial de este EcoSensor sigue en curso.\n'
+                'Espera a que termine y vuelve a descargar el CSV.\n'
+            ),
+            media_type='text/plain; charset=utf-8',
+            status_code=409,
+        )
     return Response(
         content=measurements_csv_text(device_id),
         media_type='text/csv; charset=utf-8',
