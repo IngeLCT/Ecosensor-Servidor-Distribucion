@@ -425,10 +425,11 @@ def repair_future_estimated_timestamps(device_id: str | None = None) -> int:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             '''
-            SELECT id, device_timestamp, received_at, time_source
+            SELECT id, source_id, device_timestamp, received_at, time_source
             FROM measurements
             WHERE device_timestamp IS NOT NULL AND device_timestamp != ''
               AND received_at IS NOT NULL AND received_at != ''
+              AND source_id IS NULL
               AND COALESCE(time_source, '') NOT LIKE '%drift_corrected'
             '''
         ).fetchall()
@@ -528,9 +529,17 @@ def _received_at_local(received_at: str) -> datetime:
     return parsed.astimezone().replace(tzinfo=None)
 
 
-def _sanitize_device_timestamp(device_timestamp: Any, received_at: str, time_source: str | None, time_valid: int | None) -> tuple[str | None, str | None, int | None]:
+def _sanitize_device_timestamp(device_timestamp: Any, received_at: str, time_source: str | None, time_valid: int | None, source_id: int | None = None) -> tuple[str | None, str | None, int | None]:
     if not device_timestamp:
         return None, time_source, time_valid
+
+    # Las lecturas historicas del EcoSensor llegan en lote y pueden guardarse
+    # varios minutos/horas despues de su medicion real. Si se comparan contra
+    # received_at, se destruye su hora original y muchas filas quedan con el
+    # mismo segundo de importacion. Solo corregimos drift en lecturas en vivo
+    # sin source_id/measurement_id.
+    if source_id is not None:
+        return str(device_timestamp), time_source, time_valid
 
     timestamp_text = str(device_timestamp)
     parsed_device = _parse_timestamp_local(timestamp_text)
@@ -562,6 +571,7 @@ def save_measurement(host: str, row: dict[str, Any]) -> bool:
         received_at,
         time_source,
         time_valid,
+        source_id,
     )
 
     values = {
