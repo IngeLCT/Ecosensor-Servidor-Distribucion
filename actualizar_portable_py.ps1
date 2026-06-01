@@ -72,6 +72,9 @@ Write-Host "Archivos .py copiados: $copied" -ForegroundColor Green
 Write-Step "Copiando run.bat actualizado"
 Copy-Item -Force (Join-Path $SourceDir "run.bat") (Join-Path $PortableDir "run.bat")
 
+Write-Step "Copiando README.txt actualizado"
+Copy-Item -Force (Join-Path $SourceDir "README_PORTABLE.txt") (Join-Path $PortableDir "README.txt")
+
 Write-Step "Asegurando ruta de app en Python embeddable"
 $pthFile = Get-ChildItem -Path (Join-Path $PortableDir "python") -Filter "python*._pth" | Select-Object -First 1
 if (!$pthFile) {

@@ -16,6 +16,14 @@ if not exist ".\python\python.exe" (
     exit /b 1
 )
 
+echo Creando/verificando acceso directo en el escritorio...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$desktop=[Environment]::GetFolderPath('DesktopDirectory'); $shortcut=Join-Path $desktop 'EcoSensor Servidor.lnk'; $target='%~f0'; $workdir='%~dp0'; $icon=Join-Path $workdir 'app\EcoSensor_WiFi.ico'; $shell=New-Object -ComObject WScript.Shell; $link=$shell.CreateShortcut($shortcut); $link.TargetPath=$target; $link.WorkingDirectory=$workdir; $link.Description='EcoSensor Servidor Portable'; if (Test-Path $icon) { $link.IconLocation=$icon }; $link.Save()" >nul 2>&1
+if %errorlevel%==0 (
+    echo Acceso directo OK: EcoSensor Servidor.lnk
+) else (
+    echo ADVERTENCIA: no se pudo crear/verificar el acceso directo del escritorio.
+)
+
 net session >nul 2>&1
 if %errorlevel%==0 (
     echo Ejecutando como administrador.

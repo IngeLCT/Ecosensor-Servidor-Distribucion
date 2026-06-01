@@ -5,43 +5,19 @@ Uso recomendado
 ---------------
 
 1. La primera vez:
-   - Clic derecho sobre run.bat
-   - Ejecutar como administrador
-   - Esto permite crear/verificar la regla de Firewall para el puerto TCP 8765.
+ - Clic derecho sobre run.bat
+ - Ejecutar como administrador
+ - Esto permite crear/verificar la regla de Firewall para el puerto TCP 8765.
 
 2. Las siguientes veces:
-   - Doble clic normal sobre run.bat.
+ - Doble clic normal sobre run.bat.
 
-Direcciones
------------
+Direccion para acceder a la Aplicacion Web
+------------------------------------------
 
-En la misma computadora:
+Si no se abrio automaticamente la Aplicacion Web, pega esta direccion en el navegador:
 
-    http://localhost:8765
-
-Desde otro equipo en la misma red:
-
-    http://IP_DE_ESTA_PC:8765
-
-O por mDNS si la red lo permite:
-
-    http://ecosensor-servidor.local:8765
-
-Datos de la aplicacion
-----------------------
-
-La app guarda datos dentro de la carpeta portable:
-
-    EcoSensorServidorPortable\app\data
-
-Opcionalmente puedes forzar otra ruta con la variable de entorno ECOSENSOR_DATA_DIR.
-
-Ahi se guardan:
-
-- settings.json
-- measurements.sqlite3
-- measurements_ecosensorXX.sqlite3
-- storage interno de NiceGUI
+ http://ecosensor-servidor.local:8765
 
 Notas
 -----
@@ -49,4 +25,3 @@ Notas
 - No mover ni borrar la carpeta python.
 - No mover ni borrar la carpeta app.
 - Si el firewall bloquea conexiones desde otros equipos, ejecuta run.bat como administrador una vez.
-- Si el puerto 8765 esta ocupado, cierra la otra aplicacion o cambia el puerto con la variable ECOSENSOR_SERVER_PORT.
