@@ -296,6 +296,7 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
         row = None
         total_inserted = 0
         total_received = 0
+        historical_repaired = 0
         batches = 0
         sync_started_printed = False
         suppress_zero_sync_log = False
@@ -429,6 +430,13 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                             )
                             total_inserted += inserted_count
                             total_received += len(rows)
+                            if inserted_count > 0 and min_seen_source_id > 0 and max_seen_source_id > 0:
+                                historical_repaired += await asyncio.to_thread(
+                                    repair_historical_invalid_timestamps,
+                                    selected_device_id,
+                                    min_seen_source_id,
+                                    max_seen_source_id,
+                                )
 
                         batches += 1
                         ok = bool(missing.get('ok'))
@@ -493,6 +501,13 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                                     )
                                     total_inserted += inserted_count
                                     total_received += len(rows)
+                                    if inserted_count > 0 and min_seen_source_id > 0 and max_seen_source_id > 0:
+                                        historical_repaired += await asyncio.to_thread(
+                                            repair_historical_invalid_timestamps,
+                                            selected_device_id,
+                                            min_seen_source_id,
+                                            max_seen_source_id,
+                                        )
                                     retry_success = True
                                     break
                             if not retry_success and not ok and not rows:
@@ -508,14 +523,11 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                         break
 
                 completed_history_sync = batches < SYNC_MAX_BATCHES_PER_CYCLE
-                final_pending_after_fetch = max(0, pending_count - min(total_received, pending_count))
-                if completed_history_sync and final_pending_after_fetch == 0:
-                    repaired_count = await asyncio.to_thread(repair_historical_invalid_timestamps, selected_device_id)
-                    if repaired_count:
-                        print(
-                            f"[measurement_sync] {selected_device_id}: fechas historicas reparadas: {repaired_count}",
-                            flush=True,
-                        )
+                if historical_repaired:
+                    print(
+                        f"[measurement_sync] {selected_device_id}: fechas historicas reparadas: {historical_repaired}",
+                        flush=True,
+                    )
                 _history_syncing_devices.discard(selected_device_id)
                 record_sync_event(
                     selected_device_id,
@@ -532,13 +544,6 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                 )
             else:
                 completed_history_sync = True
-                if sync_history:
-                    repaired_count = await asyncio.to_thread(repair_historical_invalid_timestamps, selected_device_id)
-                    if repaired_count:
-                        print(
-                            f"[measurement_sync] {selected_device_id}: fechas historicas reparadas: {repaired_count}",
-                            flush=True,
-                        )
                 record_sync_event(
                     selected_device_id,
                     'fetch_history_skipped',

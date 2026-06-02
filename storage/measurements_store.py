@@ -417,18 +417,28 @@ def graph_rows_since(row_id: int, limit: int = 500, device_id: str | None = None
     return [_graph_row(row) for row in rows]
 
 
+HISTORICAL_BACKFILLED_SOURCE = 'historical_backfilled'
+LEGACY_HISTORICAL_BACKFILLED_SOURCE = 'backfilled_from_next_valid'
+
+
 def _is_invalid_historical_time(row: sqlite3.Row) -> bool:
     if row['source_id'] is None:
         return False
     source = str(row['time_source'] or '').lower()
+    if source in {HISTORICAL_BACKFILLED_SOURCE, LEGACY_HISTORICAL_BACKFILLED_SOURCE}:
+        return False
     if row['time_valid'] == 0:
         return True
-    if source.startswith('estimated') or 'drift_corrected' in source or source == 'backfilled_from_next_valid':
+    if source.startswith('estimated') or 'drift_corrected' in source:
         return True
     return not str(row['device_timestamp'] or '').strip()
 
 
-def repair_historical_invalid_timestamps(device_id: str | None = None) -> int:
+def repair_historical_invalid_timestamps(
+    device_id: str | None = None,
+    from_source_id: int | None = None,
+    to_source_id: int | None = None,
+) -> int:
     """Reconstruye horas históricas inválidas usando la siguiente medición válida.
 
     No usa la hora de recepción del servidor para historial. Detecta dos casos:
@@ -439,23 +449,66 @@ def repair_historical_invalid_timestamps(device_id: str | None = None) -> int:
     Para cada corrida sospechosa, toma la siguiente medición no sospechosa como
     ancla, resta window_s (5 min por defecto) para el ID anterior y continúa
     hacia atrás sin solaparse con la medición válida previa.
+
+    Si se indica un rango de source_id, solo se revisan esas mediciones nuevas
+    más la medición válida anterior y posterior más cercanas. Esto evita
+    reanalizar todo el histórico en cada sincronización.
     """
     ensure_db(device_id)
     repaired = 0
+    source_from = _int_or_none(from_source_id)
+    source_to = _int_or_none(to_source_id)
+    if source_from is not None and source_to is not None and source_from > source_to:
+        source_from, source_to = source_to, source_from
+
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            '''
-            SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
-            FROM measurements
-            WHERE source_id IS NOT NULL
-            ORDER BY source_id ASC, id ASC
-            '''
-        ).fetchall()
+        if source_from is not None and source_to is not None:
+            rows = conn.execute(
+                '''
+                WITH scoped AS (
+                    SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+                    FROM measurements
+                    WHERE source_id BETWEEN ? AND ?
+                    UNION ALL
+                    SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+                    FROM measurements
+                    WHERE source_id = (
+                        SELECT MAX(source_id) FROM measurements WHERE source_id < ?
+                    )
+                    UNION ALL
+                    SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+                    FROM measurements
+                    WHERE source_id = (
+                        SELECT MIN(source_id) FROM measurements WHERE source_id > ?
+                    )
+                )
+                SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+                FROM scoped
+                WHERE source_id IS NOT NULL
+                GROUP BY id
+                ORDER BY source_id ASC, id ASC
+                ''',
+                (source_from, source_to, source_from, source_to),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                '''
+                SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+                FROM measurements
+                WHERE source_id IS NOT NULL
+                ORDER BY source_id ASC, id ASC
+                '''
+            ).fetchall()
         if not rows:
             return 0
 
         parsed_times = [_parse_timestamp_local(row['device_timestamp']) for row in rows]
+
+        # Referencias cronológicas por source_id:
+        # - future_min detecta fechas adelantadas respecto a una medición futura.
+        # - previous_max detecta cambios de día fallidos, donde el reloj vuelve a
+        #   00:xx pero conserva el día anterior y queda detrás de una medición previa.
         future_min: list[datetime | None] = [None] * len(rows)
         current_min: datetime | None = None
         for pos in range(len(rows) - 1, -1, -1):
@@ -464,16 +517,33 @@ def repair_historical_invalid_timestamps(device_id: str | None = None) -> int:
             if parsed is not None and (current_min is None or parsed < current_min):
                 current_min = parsed
 
-        suspicious: list[bool] = []
+        base_suspicious: list[bool] = []
         for pos, row in enumerate(rows):
             parsed = parsed_times[pos]
             invalid = _is_invalid_historical_time(row) or parsed is None
-            chronologically_impossible = (
+            future_order_impossible = (
                 parsed is not None
                 and future_min[pos] is not None
                 and parsed >= future_min[pos]
             )
-            suspicious.append(invalid or chronologically_impossible)
+            base_suspicious.append(invalid or future_order_impossible)
+
+        previous_valid_max: list[datetime | None] = [None] * len(rows)
+        current_valid_max: datetime | None = None
+        for pos, parsed in enumerate(parsed_times):
+            previous_valid_max[pos] = current_valid_max
+            if not base_suspicious[pos] and parsed is not None and (current_valid_max is None or parsed > current_valid_max):
+                current_valid_max = parsed
+
+        suspicious: list[bool] = []
+        for pos, parsed in enumerate(parsed_times):
+            past_order_impossible = (
+                not base_suspicious[pos]
+                and parsed is not None
+                and previous_valid_max[pos] is not None
+                and parsed <= previous_valid_max[pos]
+            )
+            suspicious.append(base_suspicious[pos] or past_order_impossible)
 
         index = 0
         previous_valid_dt: datetime | None = None
@@ -504,19 +574,24 @@ def repair_historical_invalid_timestamps(device_id: str | None = None) -> int:
                 candidate = cursor - timedelta(seconds=step)
                 if previous_valid_dt is not None and candidate <= previous_valid_dt:
                     break
-                updates.append((candidate.isoformat(timespec='seconds'), 'backfilled_from_next_valid', invalid_row['id']))
+                updates.append((candidate.isoformat(timespec='seconds'), HISTORICAL_BACKFILLED_SOURCE, invalid_row['id']))
                 cursor = candidate
 
             for timestamp, source, row_id in updates:
-                conn.execute(
+                cursor = conn.execute(
                     '''
                     UPDATE measurements
-                    SET device_timestamp = ?, time_valid = 0, time_source = ?
+                    SET device_timestamp = ?, time_valid = 1, time_source = ?
                     WHERE id = ?
+                      AND (
+                        COALESCE(device_timestamp, '') != ?
+                        OR COALESCE(time_valid, -1) != 1
+                        OR COALESCE(time_source, '') != ?
+                      )
                     ''',
-                    (timestamp, source, row_id),
+                    (timestamp, source, row_id, timestamp, source),
                 )
-                repaired += 1
+                repaired += int(cursor.rowcount or 0)
 
         conn.commit()
     return repaired
