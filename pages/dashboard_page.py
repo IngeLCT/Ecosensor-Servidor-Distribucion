@@ -212,9 +212,11 @@ def dashboard() -> None:
         current = registry_revision()
         if current != seen_registry_revision['value']:
             seen_registry_revision['value'] = current
-            await refresh_options_and_data()
+            await refresh_sensor_options()
+            schedule_quick_sync(selected_device_id)
+            await refresh_from_sqlite()
 
     sensor_select.on_value_change(on_sensor_change)
     ui.timer(1.0, refresh_if_registry_changed)
     ui.timer(10.0, refresh_from_sqlite)
-    ui.timer(0.1, refresh_options_and_data, once=True)
+    ui.timer(0.1, sync_then_refresh, once=True)

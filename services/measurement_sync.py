@@ -36,6 +36,8 @@ SYNC_SLOW_BATCH_SECONDS = 24.0
 SYNC_PREVENTIVE_MIN_INTERVAL_SECONDS = 90.0
 SYNC_MAX_BATCHES_PER_CYCLE = 300
 SYNC_PROGRESS_INTERVAL_SECONDS = 60.0
+SYNC_STREAM_CHUNK_SIZE = 1500
+SYNC_STREAM_TIMEOUT_SECONDS = 75.0
 SYNC_BLOCK_RETRY_DELAY_SECONDS = 10.0
 SYNC_BLOCK_MAX_RETRIES = 1
 PUSH_HOST_GRACE_SECONDS = 120
@@ -308,6 +310,12 @@ async def sync_sensor_measurements(
 
         status_payload = connection.get('status') if isinstance(connection.get('status'), dict) else {}
         status_data = status_payload.get('data') if isinstance(status_payload.get('data'), dict) else {}
+        if not status_data and isinstance(active.get('status'), dict):
+            # Al arrancar, /time o /status pueden fallar puntualmente mientras el
+            # ESP32 está ocupado. El registro activo suele conservar el último
+            # /status válido; usarlo evita esperar al siguiente push para saber
+            # que hay histórico en SD.
+            status_data = active.get('status') or {}
         await _configure_push_host_if_overdue(selected_device_id, host_now, initial_row, status_data)
 
         endpoints_now = build_endpoints(host_now)
@@ -328,6 +336,7 @@ async def sync_sensor_measurements(
 
             latest_inserted = False
             latest_remote_id = 0
+            latest_remote_id_known = False
             latest_valid = False
 
             if fetch_latest:
@@ -348,6 +357,7 @@ async def sync_sensor_measurements(
                             latest_remote_id = int(row.get('measurement_id') or 0)
                         except (TypeError, ValueError):
                             latest_remote_id = 0
+                        latest_remote_id_known = latest_remote_id > 0
                         latest_inserted = await asyncio.to_thread(save_measurement, host_now, row)
                 latest_valid = bool(isinstance(data, dict) and data.get('valid'))
                 if latest_remote_id <= 0 and isinstance(status_data, dict):
@@ -356,13 +366,25 @@ async def sync_sensor_measurements(
                     # reportando el último ID guardado en SD. Usarlo evita
                     # concluir erróneamente "sin ID remoto pendiente" hasta que
                     # llegue el siguiente push.
+                    latest_remote_id_known = 'last_measurement_id' in status_data
                     try:
                         latest_remote_id = int(status_data.get('last_measurement_id') or 0)
                     except (TypeError, ValueError):
                         latest_remote_id = 0
+                if latest_remote_id <= 0 and endpoints_now.get('status'):
+                    fresh_status = await fetch_json(endpoints_now['status'], timeout=4.0)
+                    fresh_data = fresh_status.get('data') if fresh_status.get('ok') else None
+                    if isinstance(fresh_data, dict):
+                        status_data = fresh_data
+                        latest_remote_id_known = 'last_measurement_id' in status_data
+                        try:
+                            latest_remote_id = int(status_data.get('last_measurement_id') or 0)
+                        except (TypeError, ValueError):
+                            latest_remote_id = 0
                 response_summary = summarize_response(lecturas)
             else:
                 status_data = active.get('status') if isinstance(active.get('status'), dict) else {}
+                latest_remote_id_known = 'last_measurement_id' in status_data
                 try:
                     latest_remote_id = int(status_data.get('last_measurement_id') or 0)
                 except (TypeError, ValueError):
@@ -423,206 +445,218 @@ async def sync_sensor_measurements(
             else:
                 suppress_zero_sync_log = True
                 if sync_history and selected_device_id not in _synced_notice_printed:
-                    print(
-                        f"[measurement_sync] {selected_device_id}: sincronizado; sin ID remoto pendiente",
-                        flush=True,
-                    )
-                    _synced_notice_printed.add(selected_device_id)
+                    if latest_remote_id_known:
+                        print(
+                            f"[measurement_sync] {selected_device_id}: sincronizado; sin ID remoto pendiente",
+                            flush=True,
+                        )
+                        _synced_notice_printed.add(selected_device_id)
+                    else:
+                        print(
+                            f"[measurement_sync] {selected_device_id}: no se pudo confirmar ID remoto; reintentara sincronizacion automatica",
+                            flush=True,
+                        )
 
             # Recuperación de histórico por rangos faltantes concretos.
             # Se recorre de IDs altos a bajos para rellenar primero lo más reciente.
             if missing_ranges:
                 _history_syncing_devices.add(selected_device_id)
                 for range_start, range_end in reversed(missing_ranges):
-                    export_started_at = monotonic()
-                    export = await fetch_readings_export(
-                        host_now,
-                        from_id=range_start,
-                        to_id=range_end,
-                        timeout=120.0,
-                    )
-                    export_data = export.get('data') if isinstance(export.get('data'), dict) else None
-                    export_rows = export_data.get('rows') if isinstance(export_data, dict) else None
-                    export_rows = export_rows if isinstance(export_rows, list) else []
-                    export_inserted = 0
-                    export_min_seen = 0
-                    export_max_seen = 0
-                    if export_rows:
-                        export_inserted, export_min_seen, export_max_seen = await _save_remote_rows(
+                    stream_to = range_end
+                    while stream_to >= range_start and batches < SYNC_MAX_BATCHES_PER_CYCLE:
+                        stream_from = max(range_start, stream_to - SYNC_STREAM_CHUNK_SIZE + 1)
+                        export_started_at = monotonic()
+                        export = await fetch_readings_export(
                             host_now,
-                            selected_device_id,
-                            export_rows,
-                            None,
-                            None,
+                            from_id=stream_from,
+                            to_id=stream_to,
+                            timeout=SYNC_STREAM_TIMEOUT_SECONDS,
                         )
-                        total_inserted += export_inserted
-                        total_received += len(export_rows)
-                        if export_inserted > 0 and export_min_seen > 0 and export_max_seen > 0:
-                            historical_repaired += await asyncio.to_thread(
-                                repair_historical_invalid_timestamps,
-                                selected_device_id,
-                                export_min_seen,
-                                export_max_seen,
-                            )
-                    batches += 1
-                    export_ok = bool(export.get('ok')) and bool(export_rows)
-                    record_sync_event(
-                        selected_device_id,
-                        'fetch_export_range',
-                        host=host_now,
-                        batch=batches,
-                        from_id=range_start,
-                        to_id=range_end,
-                        ok=bool(export.get('ok')),
-                        rows=len(export_rows),
-                        inserted=export_inserted,
-                        elapsed_s=round(monotonic() - export_started_at, 2),
-                        response=summarize_response(export),
-                    )
-                    now_progress = monotonic()
-                    if pending_count > 0 and (export_rows or now_progress - last_progress_print >= SYNC_PROGRESS_INTERVAL_SECONDS):
-                        synced_so_far = min(total_received, pending_count)
-                        remaining = max(0, pending_count - synced_so_far)
-                        print(
-                            f"[measurement_sync] progreso {selected_device_id}: "
-                            f"{synced_so_far}/{pending_count} recibidos, "
-                            f"{total_inserted} insertados, faltan {remaining}, "
-                            f"modo=stream, rango={range_start}-{range_end}",
-                            flush=True,
-                        )
-                        last_progress_print = now_progress
-                    if export_ok:
-                        continue
-
-                    print(
-                        f"[measurement_sync] {selected_device_id}: stream sin progreso "
-                        f"range={range_start}-{range_end} response={summarize_response(export)}; "
-                        f"usando fallback por lotes",
-                        flush=True,
-                    )
-                    chunk_to = range_end
-                    while chunk_to >= range_start and batches < SYNC_MAX_BATCHES_PER_CYCLE:
-                        chunk_from = max(range_start, chunk_to - current_chunk_size + 1)
-                        batch_started_at = monotonic()
-                        missing = await fetch_readings_range(
-                            host_now,
-                            from_id=chunk_from,
-                            to_id=chunk_to,
-                            limit=current_chunk_size,
-                            timeout=30.0,
-                        )
-                        missing_data = missing.get('data') if isinstance(missing.get('data'), dict) else None
-                        rows = missing_data.get('rows') if isinstance(missing_data, dict) else None
-                        rows = rows if isinstance(rows, list) else []
-                        inserted_count = 0
-                        min_seen_source_id = 0
-                        max_seen_source_id = 0
-                        if rows:
-                            inserted_count, min_seen_source_id, max_seen_source_id = await _save_remote_rows(
+                        export_data = export.get('data') if isinstance(export.get('data'), dict) else None
+                        export_rows = export_data.get('rows') if isinstance(export_data, dict) else None
+                        export_rows = export_rows if isinstance(export_rows, list) else []
+                        export_inserted = 0
+                        export_min_seen = 0
+                        export_max_seen = 0
+                        if export_rows:
+                            export_inserted, export_min_seen, export_max_seen = await _save_remote_rows(
                                 host_now,
                                 selected_device_id,
-                                rows,
-                                missing_data.get('current_uptime_s') if isinstance(missing_data, dict) else None,
-                                missing_data.get('boot_id') if isinstance(missing_data, dict) else None,
+                                export_rows,
+                                None,
+                                None,
                             )
-                            total_inserted += inserted_count
-                            total_received += len(rows)
-                            if inserted_count > 0 and min_seen_source_id > 0 and max_seen_source_id > 0:
+                            total_inserted += export_inserted
+                            total_received += len(export_rows)
+                            if export_inserted > 0 and export_min_seen > 0 and export_max_seen > 0:
                                 historical_repaired += await asyncio.to_thread(
                                     repair_historical_invalid_timestamps,
                                     selected_device_id,
-                                    min_seen_source_id,
-                                    max_seen_source_id,
+                                    export_min_seen,
+                                    export_max_seen,
                                 )
-
                         batches += 1
-                        ok = bool(missing.get('ok'))
+                        export_ok = bool(export.get('ok')) and bool(export_rows)
                         record_sync_event(
                             selected_device_id,
-                            'fetch_range_batch',
+                            'fetch_export_range',
                             host=host_now,
                             batch=batches,
-                            from_id=chunk_from,
-                            to_id=chunk_to,
-                            limit=current_chunk_size,
-                            ok=ok,
-                            rows=len(rows),
-                            inserted=inserted_count,
-                            min_seen_source_id=min_seen_source_id,
-                            max_seen_source_id=max_seen_source_id,
-                            response=summarize_response(missing),
+                            from_id=stream_from,
+                            to_id=stream_to,
+                            ok=bool(export.get('ok')),
+                            rows=len(export_rows),
+                            inserted=export_inserted,
+                            elapsed_s=round(monotonic() - export_started_at, 2),
+                            response=summarize_response(export),
                         )
-
-                        batch_elapsed = monotonic() - batch_started_at
-                        next_chunk_size = current_chunk_size
-                        if ok and len(rows) >= current_chunk_size and batch_elapsed <= SYNC_FAST_BATCH_SECONDS:
-                            next_chunk_size = min(SYNC_MAX_CHUNK_SIZE, current_chunk_size + SYNC_CHUNK_STEP)
-                        elif (not ok and not rows) or batch_elapsed >= SYNC_SLOW_BATCH_SECONDS:
-                            next_chunk_size = max(SYNC_MIN_CHUNK_SIZE, current_chunk_size - SYNC_CHUNK_STEP)
-
                         now_progress = monotonic()
-                        if pending_count > 0 and now_progress - last_progress_print >= SYNC_PROGRESS_INTERVAL_SECONDS:
+                        if pending_count > 0 and (export_rows or now_progress - last_progress_print >= SYNC_PROGRESS_INTERVAL_SECONDS):
                             synced_so_far = min(total_received, pending_count)
                             remaining = max(0, pending_count - synced_so_far)
                             print(
                                 f"[measurement_sync] progreso {selected_device_id}: "
                                 f"{synced_so_far}/{pending_count} recibidos, "
                                 f"{total_inserted} insertados, faltan {remaining}, "
-                                f"lotes={batches}, lote_actual={current_chunk_size}, ultimo_rango={chunk_from}-{chunk_to}",
+                                f"modo=stream, rango={stream_from}-{stream_to}",
                                 flush=True,
                             )
                             last_progress_print = now_progress
+                        if export_ok:
+                            stream_to = stream_from - 1
+                            continue
 
-                        if not ok and not rows:
-                            retry_success = False
-                            for retry in range(1, SYNC_BLOCK_MAX_RETRIES + 1):
-                                print(
-                                    f"[measurement_sync] {selected_device_id}: bloque sin progreso "
-                                    f"range={chunk_from}-{chunk_to} response={summarize_response(missing)}; "
-                                    f"reintentando en {int(block_retry_delay_seconds)}s "
-                                    f"({retry}/{SYNC_BLOCK_MAX_RETRIES})",
-                                    flush=True,
-                                )
-                                await asyncio.sleep(block_retry_delay_seconds)
-                                missing = await fetch_readings_range(
+                        print(
+                            f"[measurement_sync] {selected_device_id}: stream sin progreso "
+                            f"range={stream_from}-{stream_to} response={summarize_response(export)}; "
+                            f"usando fallback por lotes",
+                            flush=True,
+                        )
+                        chunk_to = stream_to
+                        while chunk_to >= stream_from and batches < SYNC_MAX_BATCHES_PER_CYCLE:
+                            chunk_from = max(stream_from, chunk_to - current_chunk_size + 1)
+                            batch_started_at = monotonic()
+                            missing = await fetch_readings_range(
+                                host_now,
+                                from_id=chunk_from,
+                                to_id=chunk_to,
+                                limit=current_chunk_size,
+                                timeout=30.0,
+                            )
+                            missing_data = missing.get('data') if isinstance(missing.get('data'), dict) else None
+                            rows = missing_data.get('rows') if isinstance(missing_data, dict) else None
+                            rows = rows if isinstance(rows, list) else []
+                            inserted_count = 0
+                            min_seen_source_id = 0
+                            max_seen_source_id = 0
+                            if rows:
+                                inserted_count, min_seen_source_id, max_seen_source_id = await _save_remote_rows(
                                     host_now,
-                                    from_id=chunk_from,
-                                    to_id=chunk_to,
-                                    limit=current_chunk_size,
-                                    timeout=30.0,
+                                    selected_device_id,
+                                    rows,
+                                    missing_data.get('current_uptime_s') if isinstance(missing_data, dict) else None,
+                                    missing_data.get('boot_id') if isinstance(missing_data, dict) else None,
                                 )
-                                missing_data = missing.get('data') if isinstance(missing.get('data'), dict) else None
-                                rows = missing_data.get('rows') if isinstance(missing_data, dict) else None
-                                rows = rows if isinstance(rows, list) else []
-                                ok = bool(missing.get('ok'))
-                                if rows:
-                                    inserted_count, min_seen_source_id, max_seen_source_id = await _save_remote_rows(
-                                        host_now,
+                                total_inserted += inserted_count
+                                total_received += len(rows)
+                                if inserted_count > 0 and min_seen_source_id > 0 and max_seen_source_id > 0:
+                                    historical_repaired += await asyncio.to_thread(
+                                        repair_historical_invalid_timestamps,
                                         selected_device_id,
-                                        rows,
-                                        missing_data.get('current_uptime_s') if isinstance(missing_data, dict) else None,
-                                        missing_data.get('boot_id') if isinstance(missing_data, dict) else None,
+                                        min_seen_source_id,
+                                        max_seen_source_id,
                                     )
-                                    total_inserted += inserted_count
-                                    total_received += len(rows)
-                                    if inserted_count > 0 and min_seen_source_id > 0 and max_seen_source_id > 0:
-                                        historical_repaired += await asyncio.to_thread(
-                                            repair_historical_invalid_timestamps,
-                                            selected_device_id,
-                                            min_seen_source_id,
-                                            max_seen_source_id,
-                                        )
-                                    retry_success = True
-                                    break
-                            if not retry_success and not ok and not rows:
+    
+                            batches += 1
+                            ok = bool(missing.get('ok'))
+                            record_sync_event(
+                                selected_device_id,
+                                'fetch_range_batch',
+                                host=host_now,
+                                batch=batches,
+                                from_id=chunk_from,
+                                to_id=chunk_to,
+                                limit=current_chunk_size,
+                                ok=ok,
+                                rows=len(rows),
+                                inserted=inserted_count,
+                                min_seen_source_id=min_seen_source_id,
+                                max_seen_source_id=max_seen_source_id,
+                                response=summarize_response(missing),
+                            )
+    
+                            batch_elapsed = monotonic() - batch_started_at
+                            next_chunk_size = current_chunk_size
+                            if ok and len(rows) >= current_chunk_size and batch_elapsed <= SYNC_FAST_BATCH_SECONDS:
+                                next_chunk_size = min(SYNC_MAX_CHUNK_SIZE, current_chunk_size + SYNC_CHUNK_STEP)
+                            elif (not ok and not rows) or batch_elapsed >= SYNC_SLOW_BATCH_SECONDS:
+                                next_chunk_size = max(SYNC_MIN_CHUNK_SIZE, current_chunk_size - SYNC_CHUNK_STEP)
+    
+                            now_progress = monotonic()
+                            if pending_count > 0 and now_progress - last_progress_print >= SYNC_PROGRESS_INTERVAL_SECONDS:
+                                synced_so_far = min(total_received, pending_count)
+                                remaining = max(0, pending_count - synced_so_far)
                                 print(
-                                    f"[measurement_sync] {selected_device_id}: bloque sin progreso definitivo "
-                                    f"range={chunk_from}-{chunk_to} response={summarize_response(missing)}",
+                                    f"[measurement_sync] progreso {selected_device_id}: "
+                                    f"{synced_so_far}/{pending_count} recibidos, "
+                                    f"{total_inserted} insertados, faltan {remaining}, "
+                                    f"lotes={batches}, lote_actual={current_chunk_size}, ultimo_rango={chunk_from}-{chunk_to}",
                                     flush=True,
                                 )
-                                break
-                        current_chunk_size = next_chunk_size
-                        chunk_to = chunk_from - 1
+                                last_progress_print = now_progress
+    
+                            if not ok and not rows:
+                                retry_success = False
+                                for retry in range(1, SYNC_BLOCK_MAX_RETRIES + 1):
+                                    print(
+                                        f"[measurement_sync] {selected_device_id}: bloque sin progreso "
+                                        f"range={chunk_from}-{chunk_to} response={summarize_response(missing)}; "
+                                        f"reintentando en {int(block_retry_delay_seconds)}s "
+                                        f"({retry}/{SYNC_BLOCK_MAX_RETRIES})",
+                                        flush=True,
+                                    )
+                                    await asyncio.sleep(block_retry_delay_seconds)
+                                    missing = await fetch_readings_range(
+                                        host_now,
+                                        from_id=chunk_from,
+                                        to_id=chunk_to,
+                                        limit=current_chunk_size,
+                                        timeout=30.0,
+                                    )
+                                    missing_data = missing.get('data') if isinstance(missing.get('data'), dict) else None
+                                    rows = missing_data.get('rows') if isinstance(missing_data, dict) else None
+                                    rows = rows if isinstance(rows, list) else []
+                                    ok = bool(missing.get('ok'))
+                                    if rows:
+                                        inserted_count, min_seen_source_id, max_seen_source_id = await _save_remote_rows(
+                                            host_now,
+                                            selected_device_id,
+                                            rows,
+                                            missing_data.get('current_uptime_s') if isinstance(missing_data, dict) else None,
+                                            missing_data.get('boot_id') if isinstance(missing_data, dict) else None,
+                                        )
+                                        total_inserted += inserted_count
+                                        total_received += len(rows)
+                                        if inserted_count > 0 and min_seen_source_id > 0 and max_seen_source_id > 0:
+                                            historical_repaired += await asyncio.to_thread(
+                                                repair_historical_invalid_timestamps,
+                                                selected_device_id,
+                                                min_seen_source_id,
+                                                max_seen_source_id,
+                                            )
+                                        retry_success = True
+                                        break
+                                if not retry_success and not ok and not rows:
+                                    print(
+                                        f"[measurement_sync] {selected_device_id}: bloque sin progreso definitivo "
+                                        f"range={chunk_from}-{chunk_to} response={summarize_response(missing)}",
+                                        flush=True,
+                                    )
+                                    break
+                            current_chunk_size = next_chunk_size
+                            chunk_to = chunk_from - 1
+    
+                        stream_to = stream_from - 1
 
                     if batches >= SYNC_MAX_BATCHES_PER_CYCLE:
                         break
@@ -798,7 +832,7 @@ async def sync_all_active_measurements() -> list[dict[str, Any] | None]:
     )
 
 
-async def background_sync_loop(interval_seconds: float = 300.0) -> None:
+async def background_sync_loop(interval_seconds: float = 60.0) -> None:
     print(
         f"[measurement_sync] backend iniciado: sincronizacion automatica cada {interval_seconds:.0f}s",
         flush=True,

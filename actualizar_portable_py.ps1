@@ -74,8 +74,8 @@ Copy-Item -Force (Join-Path $SourceDir "config.bat") (Join-Path $PortableDir "co
 Copy-Item -Force (Join-Path $SourceDir "run.bat") (Join-Path $PortableDir "run.bat")
 Copy-Item -Force (Join-Path $SourceDir "run_hidden.vbs") (Join-Path $PortableDir "run_hidden.vbs")
 
-Write-Step "Copiando README.txt actualizado"
-Copy-Item -Force (Join-Path $SourceDir "README_PORTABLE.txt") (Join-Path $PortableDir "README.txt")
+Write-Step "Conservando README.txt del portable"
+Write-Host "README.txt no se sobrescribe para respetar cambios manuales." -ForegroundColor Yellow
 
 Write-Step "Asegurando ruta de app en Python embeddable"
 $pthFile = Get-ChildItem -Path (Join-Path $PortableDir "python") -Filter "python*._pth" | Select-Object -First 1
