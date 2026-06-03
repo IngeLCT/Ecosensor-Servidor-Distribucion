@@ -394,30 +394,31 @@ async def sync_sensor_measurements(
                     # arrancar o justo después de borrar SQLite), /status sigue
                     # reportando el último ID guardado en SD. Usarlo evita
                     # concluir erróneamente "sin ID remoto pendiente" hasta que
-                    # llegue el siguiente push.
-                    latest_remote_id_known = 'last_measurement_id' in status_data
+                    # llegue el siguiente push. Ojo: si el valor es 0 y la base
+                    # local está vacía, NO lo consideramos confirmado.
                     try:
                         latest_remote_id = int(status_data.get('last_measurement_id') or 0)
                     except (TypeError, ValueError):
                         latest_remote_id = 0
+                    latest_remote_id_known = latest_remote_id > 0
                 if latest_remote_id <= 0 and endpoints_now.get('status'):
                     fresh_status = await fetch_json(endpoints_now['status'], timeout=4.0)
                     fresh_data = fresh_status.get('data') if fresh_status.get('ok') else None
                     if isinstance(fresh_data, dict):
                         status_data = fresh_data
-                        latest_remote_id_known = 'last_measurement_id' in status_data
                         try:
                             latest_remote_id = int(status_data.get('last_measurement_id') or 0)
                         except (TypeError, ValueError):
                             latest_remote_id = 0
+                        latest_remote_id_known = latest_remote_id > 0
                 response_summary = summarize_response(lecturas)
             else:
                 status_data = active.get('status') if isinstance(active.get('status'), dict) else {}
-                latest_remote_id_known = 'last_measurement_id' in status_data
                 try:
                     latest_remote_id = int(status_data.get('last_measurement_id') or 0)
                 except (TypeError, ValueError):
                     latest_remote_id = 0
+                latest_remote_id_known = latest_remote_id > 0
                 response_summary = 'skipped_fetch_latest'
 
             record_sync_event(
@@ -449,6 +450,9 @@ async def sync_sensor_measurements(
             else:
                 missing_ranges = await asyncio.to_thread(missing_source_id_ranges, selected_device_id, latest_remote_id)
                 pending_count = sum((end_id - start_id + 1) for start_id, end_id in missing_ranges)
+
+            if latest_remote_id <= 0 and local_floor_id <= 0:
+                latest_remote_id_known = False
 
             if latest_remote_id > 0:
                 if missing_ranges:
