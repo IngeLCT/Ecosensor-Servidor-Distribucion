@@ -350,6 +350,16 @@ async def sync_sensor_measurements(
                             latest_remote_id = 0
                         latest_inserted = await asyncio.to_thread(save_measurement, host_now, row)
                 latest_valid = bool(isinstance(data, dict) and data.get('valid'))
+                if latest_remote_id <= 0 and isinstance(status_data, dict):
+                    # Si /lecturas aún no tiene promedio válido (por ejemplo al
+                    # arrancar o justo después de borrar SQLite), /status sigue
+                    # reportando el último ID guardado en SD. Usarlo evita
+                    # concluir erróneamente "sin ID remoto pendiente" hasta que
+                    # llegue el siguiente push.
+                    try:
+                        latest_remote_id = int(status_data.get('last_measurement_id') or 0)
+                    except (TypeError, ValueError):
+                        latest_remote_id = 0
                 response_summary = summarize_response(lecturas)
             else:
                 status_data = active.get('status') if isinstance(active.get('status'), dict) else {}
