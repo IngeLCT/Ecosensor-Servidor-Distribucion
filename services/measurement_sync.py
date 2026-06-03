@@ -36,8 +36,9 @@ SYNC_SLOW_BATCH_SECONDS = 24.0
 SYNC_PREVENTIVE_MIN_INTERVAL_SECONDS = 90.0
 SYNC_MAX_BATCHES_PER_CYCLE = 300
 SYNC_PROGRESS_INTERVAL_SECONDS = 60.0
-SYNC_STREAM_CHUNK_SIZE = 1500
+SYNC_STREAM_CHUNK_SIZE = 750
 SYNC_STREAM_TIMEOUT_SECONDS = 75.0
+SYNC_STREAM_MAX_RETRIES = 1
 SYNC_BLOCK_RETRY_DELAY_SECONDS = 10.0
 SYNC_BLOCK_MAX_RETRIES = 1
 PUSH_HOST_GRACE_SECONDS = 120
@@ -193,6 +194,28 @@ def display_host(host: str) -> str:
     return clean or DEVICE_ID
 
 
+def _format_duration(seconds: float | int | None) -> str:
+    try:
+        total = max(0, int(float(seconds or 0)))
+    except (TypeError, ValueError):
+        total = 0
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f'{hours}h{minutes:02d}m{secs:02d}s'
+    if minutes:
+        return f'{minutes}m{secs:02d}s'
+    return f'{secs}s'
+
+
+def _sync_speed_eta(total_received: int, pending_count: int, started_at: float) -> tuple[float, str]:
+    elapsed = max(0.001, monotonic() - started_at)
+    speed = total_received / elapsed if total_received > 0 else 0.0
+    remaining = max(0, pending_count - total_received)
+    eta = remaining / speed if speed > 0 else 0
+    return speed, _format_duration(eta)
+
+
 async def _save_remote_rows(
     host: str,
     device_id: str,
@@ -327,6 +350,7 @@ async def sync_sensor_measurements(
         sync_started_printed = False
         suppress_zero_sync_log = False
         last_progress_print = monotonic()
+        history_started_at = monotonic()
         block_retry_delay_seconds = 2.0 if user_initiated else SYNC_BLOCK_RETRY_DELAY_SECONDS
         current_chunk_size = SYNC_CHUNK_SIZE
 
@@ -475,6 +499,25 @@ async def sync_sensor_measurements(
                         export_data = export.get('data') if isinstance(export.get('data'), dict) else None
                         export_rows = export_data.get('rows') if isinstance(export_data, dict) else None
                         export_rows = export_rows if isinstance(export_rows, list) else []
+                        if not export.get('ok') and not export_rows:
+                            for retry in range(1, SYNC_STREAM_MAX_RETRIES + 1):
+                                print(
+                                    f"[measurement_sync] {selected_device_id}: stream sin progreso "
+                                    f"range={stream_from}-{stream_to} response={summarize_response(export)}; "
+                                    f"reintentando mismo bloque ({retry}/{SYNC_STREAM_MAX_RETRIES})",
+                                    flush=True,
+                                )
+                                export = await fetch_readings_export(
+                                    host_now,
+                                    from_id=stream_from,
+                                    to_id=stream_to,
+                                    timeout=SYNC_STREAM_TIMEOUT_SECONDS,
+                                )
+                                export_data = export.get('data') if isinstance(export.get('data'), dict) else None
+                                export_rows = export_data.get('rows') if isinstance(export_data, dict) else None
+                                export_rows = export_rows if isinstance(export_rows, list) else []
+                                if export.get('ok') or export_rows:
+                                    break
                         export_inserted = 0
                         export_min_seen = 0
                         export_max_seen = 0
@@ -514,10 +557,12 @@ async def sync_sensor_measurements(
                         if pending_count > 0 and (export_rows or now_progress - last_progress_print >= SYNC_PROGRESS_INTERVAL_SECONDS):
                             synced_so_far = min(total_received, pending_count)
                             remaining = max(0, pending_count - synced_so_far)
+                            speed, eta = _sync_speed_eta(synced_so_far, pending_count, history_started_at)
                             print(
                                 f"[measurement_sync] progreso {selected_device_id}: "
                                 f"{synced_so_far}/{pending_count} recibidos, "
                                 f"{total_inserted} insertados, faltan {remaining}, "
+                                f"velocidad={speed:.1f} filas/s, eta={eta}, "
                                 f"modo=stream, rango={stream_from}-{stream_to}",
                                 flush=True,
                             )
@@ -596,10 +641,12 @@ async def sync_sensor_measurements(
                             if pending_count > 0 and now_progress - last_progress_print >= SYNC_PROGRESS_INTERVAL_SECONDS:
                                 synced_so_far = min(total_received, pending_count)
                                 remaining = max(0, pending_count - synced_so_far)
+                                speed, eta = _sync_speed_eta(synced_so_far, pending_count, history_started_at)
                                 print(
                                     f"[measurement_sync] progreso {selected_device_id}: "
                                     f"{synced_so_far}/{pending_count} recibidos, "
                                     f"{total_inserted} insertados, faltan {remaining}, "
+                                    f"velocidad={speed:.1f} filas/s, eta={eta}, "
                                     f"lotes={batches}, lote_actual={current_chunk_size}, ultimo_rango={chunk_from}-{chunk_to}",
                                     flush=True,
                                 )
