@@ -83,9 +83,10 @@ if ($LASTEXITCODE -ge 8) {
     throw "Robocopy fallo con codigo $LASTEXITCODE"
 }
 
-Write-Step "Copiando config.bat, run.bat y README_PORTABLE.txt a la raiz portable"
+Write-Step "Copiando config.bat, run.bat, run_hidden.vbs y README_PORTABLE.txt a la raiz portable"
 Copy-Item -Force (Join-Path $SourceDir "config.bat") (Join-Path $PortableDir "config.bat")
 Copy-Item -Force (Join-Path $SourceDir "run.bat") (Join-Path $PortableDir "run.bat")
+Copy-Item -Force (Join-Path $SourceDir "run_hidden.vbs") (Join-Path $PortableDir "run_hidden.vbs")
 Copy-Item -Force (Join-Path $SourceDir "README_PORTABLE.txt") (Join-Path $PortableDir "README.txt")
 
 Write-Step "Instalando pip en Python portable si hace falta"
@@ -130,5 +131,6 @@ Write-Host "  $PortableDir" -ForegroundColor Green
 Write-Host ""
 Write-Host "Primera configuracion recomendada:" -ForegroundColor Yellow
 Write-Host "  Doble clic en config.bat y acepta permisos de administrador"
-Write-Host "Despues ejecuta el servidor con run.bat o desde el acceso directo del escritorio"
+Write-Host "Despues ejecuta el servidor desde el acceso directo del escritorio sin consola"
+Write-Host "Para diagnostico manual puedes usar run.bat"
 Write-Host ""

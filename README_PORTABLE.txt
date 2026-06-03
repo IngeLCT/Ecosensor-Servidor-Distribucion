@@ -11,8 +11,9 @@ Uso recomendado
  - Tambien crea el acceso directo EcoSensor Servidor en el escritorio
 
 2. Las siguientes veces:
- - Doble clic normal sobre run.bat
- - O usa el acceso directo EcoSensor Servidor del escritorio
+ - Usa el acceso directo EcoSensor Servidor del escritorio
+ - Este acceso directo inicia el servidor sin abrir consola
+ - Para diagnostico manual, ejecuta run.bat
 
 Direccion para acceder a la Aplicacion Web
 ------------------------------------------
@@ -26,5 +27,5 @@ Notas
 
 - No mover ni borrar la carpeta python.
 - No mover ni borrar la carpeta app.
-- No mover ni borrar run.bat ni config.bat.
+- No mover ni borrar run.bat, run_hidden.vbs ni config.bat.
 - Si el firewall bloquea conexiones desde otros equipos, ejecuta config.bat una vez.

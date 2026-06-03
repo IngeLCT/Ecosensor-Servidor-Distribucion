@@ -69,9 +69,10 @@ foreach ($file in $sourceFiles) {
 }
 Write-Host "Archivos .py copiados: $copied" -ForegroundColor Green
 
-Write-Step "Copiando config.bat y run.bat actualizados"
+Write-Step "Copiando config.bat, run.bat y run_hidden.vbs actualizados"
 Copy-Item -Force (Join-Path $SourceDir "config.bat") (Join-Path $PortableDir "config.bat")
 Copy-Item -Force (Join-Path $SourceDir "run.bat") (Join-Path $PortableDir "run.bat")
+Copy-Item -Force (Join-Path $SourceDir "run_hidden.vbs") (Join-Path $PortableDir "run_hidden.vbs")
 
 Write-Step "Copiando README.txt actualizado"
 Copy-Item -Force (Join-Path $SourceDir "README_PORTABLE.txt") (Join-Path $PortableDir "README.txt")
@@ -144,5 +145,5 @@ Write-Host ""
 Write-Host "Archivos .py actualizados correctamente en:" -ForegroundColor Green
 Write-Host "  $AppDir" -ForegroundColor Green
 Write-Host ""
-Write-Host "Si es la primera vez, ejecuta config.bat para firewall y acceso directo." -ForegroundColor Yellow
-Write-Host "Despues puedes iniciar el portable con run.bat." -ForegroundColor Yellow
+Write-Host "Ejecuta config.bat para actualizar firewall y acceso directo sin consola." -ForegroundColor Yellow
+Write-Host "Despues inicia el portable desde el acceso directo. Para diagnostico manual usa run.bat." -ForegroundColor Yellow
