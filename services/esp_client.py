@@ -45,6 +45,7 @@ def build_endpoints(host: str) -> dict[str, str]:
         'lecturas': f'{base_url}/lecturas' if base_url else '',
         'lecturas_since': f'{base_url}/lecturas/since' if base_url else '',
         'lecturas_range': f'{base_url}/lecturas/range' if base_url else '',
+        'lecturas_export': f'{base_url}/lecturas/export' if base_url else '',
         'lecturas_recent': f'{base_url}/lecturas/recent' if base_url else '',
         'config': f'{base_url}/config' if base_url else '',
         'time': f'{base_url}/time' if base_url else '',
@@ -353,6 +354,53 @@ async def fetch_readings_range(host: str, from_id: int, to_id: int, limit: int =
         'timeout_ms': max(250, int(timeout * 1000)),
     })
     return await fetch_json(f"{endpoints['lecturas_range']}?{query}", timeout=timeout)
+
+
+def fetch_readings_export_sync(host: str, from_id: int, to_id: int, timeout: float = 120.0) -> dict[str, Any]:
+    endpoints = build_endpoints(host)
+    if not endpoints['lecturas_export']:
+        return {'ok': False, 'status': 0, 'url': '', 'data': 'missing host'}
+    query = urlencode({
+        'from': max(1, int(from_id)),
+        'to': max(1, int(to_id)),
+        'timeout_ms': max(30000, int(timeout * 1000)),
+    })
+    url = f"{endpoints['lecturas_export']}?{query}"
+    request = Request(url, headers={'Accept': 'application/x-ndjson'})
+    rows: list[dict[str, Any]] = []
+    errors: list[Any] = []
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            for raw_line in response:
+                line = raw_line.decode('utf-8', errors='replace').strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    errors.append(line[:160])
+                    continue
+                if isinstance(item, dict) and 'error' in item:
+                    errors.append(item)
+                    continue
+                if isinstance(item, dict):
+                    rows.append(item)
+            ok = 200 <= response.status < 300 and not errors
+            return {
+                'ok': ok,
+                'status': response.status,
+                'url': url,
+                'data': {'rows': rows, 'count': len(rows), 'errors': errors},
+            }
+    except HTTPError as exc:
+        raw = exc.read().decode('utf-8', errors='replace') if exc.fp else ''
+        return {'ok': False, 'status': exc.code, 'url': url, 'data': raw}
+    except (TimeoutError, URLError, OSError) as exc:
+        return {'ok': False, 'status': 0, 'url': url, 'data': str(exc)}
+
+
+async def fetch_readings_export(host: str, from_id: int, to_id: int, timeout: float = 120.0) -> dict[str, Any]:
+    return await asyncio.to_thread(fetch_readings_export_sync, host, from_id, to_id, timeout)
 
 
 async def fetch_recent_readings(host: str, after_id: int, before_id: int = 0, limit: int = 25, timeout: float = 4.0) -> dict[str, Any]:
