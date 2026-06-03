@@ -744,11 +744,54 @@ def _sanitize_device_timestamp(device_timestamp: Any, received_at: str, time_sou
     return corrected, corrected_source, 0
 
 
-def save_measurement(host: str, row: dict[str, Any]) -> bool:
-    """Guarda una medición válida. Devuelve True si insertó una fila nueva."""
-    received_at = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+INSERT_MEASUREMENT_SQL = '''
+INSERT OR IGNORE INTO measurements (
+    device_id, host, device_timestamp, received_at, source_id,
+    boot_id, uptime_s, time_valid, time_source,
+    pm1p0, pm2p5, pm4p0, pm10p0,
+    voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum, window_s
+) VALUES (
+    :device_id, :host, :device_timestamp, :received_at, :source_id,
+    :boot_id, :uptime_s, :time_valid, :time_source,
+    :pm1p0, :pm2p5, :pm4p0, :pm10p0,
+    :voc, :nox, :co2, :temp, :hum, :scd_temp, :scd_hum, :sen_temp, :sen_hum, :window_s
+)
+'''
+
+UPDATE_MEASUREMENT_SQL = '''
+UPDATE measurements
+SET host = :host,
+    device_timestamp = :device_timestamp,
+    received_at = :received_at,
+    boot_id = COALESCE(:boot_id, boot_id),
+    uptime_s = COALESCE(:uptime_s, uptime_s),
+    time_valid = COALESCE(:time_valid, time_valid),
+    time_source = COALESCE(:time_source, time_source),
+    pm1p0 = COALESCE(:pm1p0, pm1p0),
+    pm2p5 = COALESCE(:pm2p5, pm2p5),
+    pm4p0 = COALESCE(:pm4p0, pm4p0),
+    pm10p0 = COALESCE(:pm10p0, pm10p0),
+    voc = COALESCE(:voc, voc),
+    nox = COALESCE(:nox, nox),
+    co2 = COALESCE(:co2, co2),
+    temp = COALESCE(:temp, temp),
+    hum = COALESCE(:hum, hum),
+    scd_temp = COALESCE(:scd_temp, scd_temp),
+    scd_hum = COALESCE(:scd_hum, scd_hum),
+    sen_temp = COALESCE(:sen_temp, sen_temp),
+    sen_hum = COALESCE(:sen_hum, sen_hum),
+    window_s = COALESCE(:window_s, window_s)
+WHERE device_id = :device_id AND source_id = :source_id
+  AND (
+    COALESCE(time_source, '') NOT IN ('esp_push', 'esp_live')
+    OR :prefer_live_source = 1
+  )
+'''
+
+
+def _measurement_values(host: str, row: dict[str, Any], received_at: str | None = None) -> dict[str, Any]:
+    received_at = received_at or datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
     device_id = str(row.get('id') or row.get('device_id') or '').strip() or 'ecosensor01'
-    ensure_db(device_id)
     device_timestamp = row.get('timestamp') or None
     source_id = _source_id_from_row(row)
     time_valid_bool = _bool_or_none(row.get('time_valid'))
@@ -761,8 +804,7 @@ def save_measurement(host: str, row: dict[str, Any]) -> bool:
         time_valid,
         source_id,
     )
-
-    values = {
+    return {
         'device_id': device_id,
         'host': host,
         'device_timestamp': device_timestamp,
@@ -788,57 +830,45 @@ def save_measurement(host: str, row: dict[str, Any]) -> bool:
         'window_s': _int_or_none(row.get('window_s')),
     }
 
+
+def save_measurement(host: str, row: dict[str, Any]) -> bool:
+    """Guarda una medición válida. Devuelve True si insertó una fila nueva."""
+    device_id = str(row.get('id') or row.get('device_id') or '').strip() or 'ecosensor01'
+    ensure_db(device_id)
+    values = _measurement_values(host, row)
+    source_id = values.get('source_id')
+    device_timestamp = values.get('device_timestamp')
+    time_source = values.get('time_source')
+
     with sqlite3.connect(db_file_for_device(device_id)) as conn:
-        cursor = conn.execute(
-            '''
-            INSERT OR IGNORE INTO measurements (
-                device_id, host, device_timestamp, received_at, source_id,
-                boot_id, uptime_s, time_valid, time_source,
-                pm1p0, pm2p5, pm4p0, pm10p0,
-                voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum, window_s
-            ) VALUES (
-                :device_id, :host, :device_timestamp, :received_at, :source_id,
-                :boot_id, :uptime_s, :time_valid, :time_source,
-                :pm1p0, :pm2p5, :pm4p0, :pm10p0,
-                :voc, :nox, :co2, :temp, :hum, :scd_temp, :scd_hum, :sen_temp, :sen_hum, :window_s
-            )
-            ''',
-            values,
-        )
+        cursor = conn.execute(INSERT_MEASUREMENT_SQL, values)
         inserted = cursor.rowcount > 0
         if not inserted and source_id is not None and device_timestamp:
             prefer_live_source = time_source in {'esp_push', 'esp_live'}
-            conn.execute(
-                '''
-                UPDATE measurements
-                SET host = :host,
-                    device_timestamp = :device_timestamp,
-                    received_at = :received_at,
-                    boot_id = COALESCE(:boot_id, boot_id),
-                    uptime_s = COALESCE(:uptime_s, uptime_s),
-                    time_valid = COALESCE(:time_valid, time_valid),
-                    time_source = COALESCE(:time_source, time_source),
-                    pm1p0 = COALESCE(:pm1p0, pm1p0),
-                    pm2p5 = COALESCE(:pm2p5, pm2p5),
-                    pm4p0 = COALESCE(:pm4p0, pm4p0),
-                    pm10p0 = COALESCE(:pm10p0, pm10p0),
-                    voc = COALESCE(:voc, voc),
-                    nox = COALESCE(:nox, nox),
-                    co2 = COALESCE(:co2, co2),
-                    temp = COALESCE(:temp, temp),
-                    hum = COALESCE(:hum, hum),
-                    scd_temp = COALESCE(:scd_temp, scd_temp),
-                    scd_hum = COALESCE(:scd_hum, scd_hum),
-                    sen_temp = COALESCE(:sen_temp, sen_temp),
-                    sen_hum = COALESCE(:sen_hum, sen_hum),
-                    window_s = COALESCE(:window_s, window_s)
-                WHERE device_id = :device_id AND source_id = :source_id
-                  AND (
-                    COALESCE(time_source, '') NOT IN ('esp_push', 'esp_live')
-                    OR :prefer_live_source = 1
-                  )
-                ''',
-                {**values, 'prefer_live_source': 1 if prefer_live_source else 0},
-            )
+            conn.execute(UPDATE_MEASUREMENT_SQL, {**values, 'prefer_live_source': 1 if prefer_live_source else 0})
         conn.commit()
         return inserted
+
+
+def save_measurements_bulk(host: str, rows: list[dict[str, Any]], device_id: str | None = None) -> int:
+    """Guarda muchas mediciones en una sola transacción. Devuelve filas nuevas insertadas."""
+    if not rows:
+        return 0
+    target_device_id = str(device_id or rows[0].get('id') or rows[0].get('device_id') or '').strip() or 'ecosensor01'
+    ensure_db(target_device_id)
+    received_at = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+    values_list = [_measurement_values(host, row, received_at) for row in rows]
+    inserted = 0
+    with sqlite3.connect(db_file_for_device(target_device_id)) as conn:
+        for values in values_list:
+            cursor = conn.execute(INSERT_MEASUREMENT_SQL, values)
+            if cursor.rowcount > 0:
+                inserted += 1
+                continue
+            source_id = values.get('source_id')
+            device_timestamp = values.get('device_timestamp')
+            if source_id is not None and device_timestamp:
+                prefer_live_source = values.get('time_source') in {'esp_push', 'esp_live'}
+                conn.execute(UPDATE_MEASUREMENT_SQL, {**values, 'prefer_live_source': 1 if prefer_live_source else 0})
+        conn.commit()
+    return inserted

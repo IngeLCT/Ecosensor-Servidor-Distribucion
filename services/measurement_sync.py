@@ -20,6 +20,7 @@ from storage.measurements_store import (
     missing_source_id_ranges,
     repair_historical_invalid_timestamps,
     save_measurement,
+    save_measurements_bulk,
 )
 
 _sync_locks: dict[str, asyncio.Lock] = {}
@@ -230,6 +231,8 @@ async def _save_remote_rows(
     server_now = datetime.now().astimezone()
     last_estimated: datetime | None = None
 
+    prepared_rows: list[dict[str, Any]] = []
+
     for item in rows:
         if not isinstance(item, dict):
             continue
@@ -271,8 +274,10 @@ async def _save_remote_rows(
                 last_estimated = server_now
             item['timestamp'] = _iso_local(last_estimated)
             item['time_source'] = 'estimated_sequence'
-        if await asyncio.to_thread(save_measurement, host, item):
-            inserted_count += 1
+        prepared_rows.append(item)
+
+    if prepared_rows:
+        inserted_count = await asyncio.to_thread(save_measurements_bulk, host, prepared_rows, device_id)
 
     return inserted_count, min_seen_source_id, max_seen_source_id
 
@@ -840,6 +845,8 @@ def schedule_preventive_history_sync(device_id: str | None, *, delay_seconds: fl
     contra descargas CSV o ciclos automáticos.
     """
     target_id = (device_id or DEVICE_ID).strip().lower() or DEVICE_ID
+    if target_id in _history_syncing_devices:
+        return
     now = monotonic()
     if now - _last_preventive_sync_at.get(target_id, 0.0) < SYNC_PREVENTIVE_MIN_INTERVAL_SECONDS:
         return
