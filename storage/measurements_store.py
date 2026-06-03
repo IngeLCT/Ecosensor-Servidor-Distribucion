@@ -202,6 +202,7 @@ def get_latest_measurement(device_id: str | None = None) -> dict[str, Any] | Non
                    voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum, window_s
             FROM measurements
             ORDER BY
+                CASE WHEN COALESCE(device_timestamp, '') != '' THEN 0 ELSE 1 END,
                 COALESCE(
                     datetime(replace(replace(substr(device_timestamp, 1, 19), 'T', ' '), 'Z', '')),
                     datetime(replace(replace(substr(received_at, 1, 19), 'T', ' '), 'Z', ''))
@@ -340,6 +341,7 @@ def graph_latest_row(device_id: str | None = None) -> dict[str, Any] | None:
                    voc, nox, co2, temp, hum
             FROM measurements
             ORDER BY
+                CASE WHEN COALESCE(device_timestamp, '') != '' THEN 0 ELSE 1 END,
                 COALESCE(
                     datetime(replace(replace(substr(device_timestamp, 1, 19), 'T', ' '), 'Z', '')),
                     datetime(replace(replace(substr(received_at, 1, 19), 'T', ' '), 'Z', ''))
