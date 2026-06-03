@@ -17,6 +17,7 @@ def dashboard() -> None:
     add_styles()
 
     selected_device_id: str | None = None
+    searching_option = '__searching_ecosensor__'
     seen_registry_revision = {'value': registry_revision()}
     quick_sync_tasks: dict[str, asyncio.Task] = {}
 
@@ -53,9 +54,7 @@ def dashboard() -> None:
 
     def render_table(row: dict[str, Any] | None) -> None:
         if not row:
-            table.set_content(
-                '<table class="measure-table"><tr><th>Mediciones</th><th>Valor</th><th>Unidad</th></tr></table>'
-            )
+            table.set_content('')
             return
 
         rows = [
@@ -122,9 +121,12 @@ def dashboard() -> None:
         if not options:
             selected_device_id = None
             app.storage.user.pop('selected_device_id', None)
-            sensor_select.value = None
+            sensor_select.options = {searching_option: 'Buscando ecosensor'}
+            sensor_select.value = searching_option
+            sensor_select.disable()
             sensor_select.update()
             return
+        sensor_select.enable()
         if selected_device_id not in options:
             selected_device_id = next(iter(options))
             app.storage.user['selected_device_id'] = selected_device_id
@@ -196,6 +198,8 @@ def dashboard() -> None:
 
     async def on_sensor_change(event: Any) -> None:
         nonlocal selected_device_id
+        if event.value == searching_option:
+            return
         selected_device_id = str(event.value or '') or None
         if selected_device_id:
             app.storage.user['selected_device_id'] = selected_device_id
