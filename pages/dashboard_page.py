@@ -4,7 +4,7 @@ from typing import Any
 from nicegui import app, ui
 
 from services.device_registry import active_device_options, ensure_active_devices, registry_revision
-from services.measurement_sync import sync_sensor_measurements
+from services.measurement_sync import schedule_preventive_history_sync, sync_before_csv_download, sync_sensor_measurements
 from shared.formatters import format_value
 from storage.measurements_store import get_latest_measurement
 from shared.styles import add_styles
@@ -49,10 +49,7 @@ def dashboard() -> None:
         time_info = ui.html('').classes('status-line')
         connection_info = ui.label('').classes('status-line mt-3')
         with ui.row().classes('justify-center gap-3 mt-4'):
-            ui.button(
-                'Descargar CSV',
-                on_click=lambda: ui.navigate.to(f'/api/measurements.csv?device_id={selected_device_id or ""}'),
-            ).props('unelevated no-caps').classes('button1')
+            csv_button = ui.button('Descargar CSV').props('unelevated no-caps').classes('button1')
 
     def render_table(row: dict[str, Any] | None) -> None:
         if not row:
@@ -153,6 +150,30 @@ def dashboard() -> None:
         else:
             connection_info.set_text('EcoSensor activo, sin mediciones almacenadas todavía.')
 
+    async def download_csv_after_sync() -> None:
+        if not selected_device_id:
+            ui.notify('Selecciona un EcoSensor antes de descargar CSV.', type='warning')
+            return
+
+        csv_button.disable()
+        ui.notify('Sincronizando historial antes de descargar CSV…', type='info')
+        try:
+            result = await sync_before_csv_download(selected_device_id)
+            if not result.get('ok'):
+                message = str(result.get('message') or result.get('error') or 'No se pudo sincronizar el historial.')
+                pending = result.get('pending')
+                if pending:
+                    message = f'{message} Pendientes: {pending}.'
+                ui.notify(message, type='negative', multi_line=True)
+                return
+            await refresh_from_sqlite()
+            ui.notify('Historial sincronizado. Descargando CSV…', type='positive')
+            ui.navigate.to(f'/api/measurements.csv?device_id={selected_device_id}')
+        finally:
+            csv_button.enable()
+
+    csv_button.on_click(download_csv_after_sync)
+
     def schedule_quick_sync(device_id: str | None) -> None:
         if not device_id:
             return
@@ -162,6 +183,7 @@ def dashboard() -> None:
         quick_sync_tasks[device_id] = asyncio.create_task(
             sync_sensor_measurements(device_id, fetch_latest=True, sync_history=False)
         )
+        schedule_preventive_history_sync(device_id, delay_seconds=5.0)
 
     async def sync_then_refresh() -> None:
         await refresh_sensor_options()

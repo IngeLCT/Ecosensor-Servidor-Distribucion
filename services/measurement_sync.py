@@ -25,7 +25,15 @@ from storage.measurements_store import (
 _sync_locks: dict[str, asyncio.Lock] = {}
 _synced_notice_printed: set[str] = set()
 _history_syncing_devices: set[str] = set()
+_preventive_sync_tasks: dict[str, asyncio.Task] = {}
+_last_preventive_sync_at: dict[str, float] = {}
 SYNC_CHUNK_SIZE = 15
+SYNC_MIN_CHUNK_SIZE = 15
+SYNC_MAX_CHUNK_SIZE = 60
+SYNC_CHUNK_STEP = 15
+SYNC_FAST_BATCH_SECONDS = 8.0
+SYNC_SLOW_BATCH_SECONDS = 24.0
+SYNC_PREVENTIVE_MIN_INTERVAL_SECONDS = 90.0
 SYNC_MAX_BATCHES_PER_CYCLE = 300
 SYNC_PROGRESS_INTERVAL_SECONDS = 60.0
 SYNC_BLOCK_RETRY_DELAY_SECONDS = 60.0
@@ -244,12 +252,22 @@ async def _save_remote_rows(
     return inserted_count, min_seen_source_id, max_seen_source_id
 
 
-async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest: bool = True, sync_history: bool = True) -> dict[str, Any] | None:
+async def sync_sensor_measurements(
+    device_id: str | None = None,
+    *,
+    fetch_latest: bool = True,
+    sync_history: bool = True,
+    user_initiated: bool = False,
+) -> dict[str, Any] | None:
     """Sincroniza un EcoSensor concreto y devuelve su última medición conocida.
 
     Cuando ``fetch_latest`` es False no consulta ``/lecturas``. Cuando
     ``sync_history`` es False solo deja listo el estado rápido del sensor
     (vida/hora/última medición) y no recupera histórico desde SD.
+
+    ``user_initiated`` mantiene la estrategia conservadora de lotes, pero evita
+    esperas largas entre reintentos cuando el usuario pidió la sincronización
+    manualmente antes de descargar CSV.
     """
     active = await ensure_device_active(device_id)
     if not active:
@@ -301,6 +319,8 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
         sync_started_printed = False
         suppress_zero_sync_log = False
         last_progress_print = monotonic()
+        block_retry_delay_seconds = 2.0 if user_initiated else SYNC_BLOCK_RETRY_DELAY_SECONDS
+        current_chunk_size = SYNC_CHUNK_SIZE
 
         if endpoints_now['lecturas']:
             completed_history_sync = False
@@ -406,12 +426,13 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                 for range_start, range_end in reversed(missing_ranges):
                     chunk_to = range_end
                     while chunk_to >= range_start and batches < SYNC_MAX_BATCHES_PER_CYCLE:
-                        chunk_from = max(range_start, chunk_to - SYNC_CHUNK_SIZE + 1)
+                        chunk_from = max(range_start, chunk_to - current_chunk_size + 1)
+                        batch_started_at = monotonic()
                         missing = await fetch_readings_range(
                             host_now,
                             from_id=chunk_from,
                             to_id=chunk_to,
-                            limit=SYNC_CHUNK_SIZE,
+                            limit=current_chunk_size,
                             timeout=30.0,
                         )
                         missing_data = missing.get('data') if isinstance(missing.get('data'), dict) else None
@@ -447,7 +468,7 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                             batch=batches,
                             from_id=chunk_from,
                             to_id=chunk_to,
-                            limit=SYNC_CHUNK_SIZE,
+                            limit=current_chunk_size,
                             ok=ok,
                             rows=len(rows),
                             inserted=inserted_count,
@@ -455,6 +476,13 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                             max_seen_source_id=max_seen_source_id,
                             response=summarize_response(missing),
                         )
+
+                        batch_elapsed = monotonic() - batch_started_at
+                        next_chunk_size = current_chunk_size
+                        if ok and len(rows) >= current_chunk_size and batch_elapsed <= SYNC_FAST_BATCH_SECONDS:
+                            next_chunk_size = min(SYNC_MAX_CHUNK_SIZE, current_chunk_size + SYNC_CHUNK_STEP)
+                        elif (not ok and not rows) or batch_elapsed >= SYNC_SLOW_BATCH_SECONDS:
+                            next_chunk_size = max(SYNC_MIN_CHUNK_SIZE, current_chunk_size - SYNC_CHUNK_STEP)
 
                         now_progress = monotonic()
                         if pending_count > 0 and now_progress - last_progress_print >= SYNC_PROGRESS_INTERVAL_SECONDS:
@@ -464,7 +492,7 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                                 f"[measurement_sync] progreso {selected_device_id}: "
                                 f"{synced_so_far}/{pending_count} recibidos, "
                                 f"{total_inserted} insertados, faltan {remaining}, "
-                                f"lotes={batches}, ultimo_rango={chunk_from}-{chunk_to}",
+                                f"lotes={batches}, lote_actual={current_chunk_size}, ultimo_rango={chunk_from}-{chunk_to}",
                                 flush=True,
                             )
                             last_progress_print = now_progress
@@ -475,16 +503,16 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                                 print(
                                     f"[measurement_sync] {selected_device_id}: bloque sin progreso "
                                     f"range={chunk_from}-{chunk_to} response={summarize_response(missing)}; "
-                                    f"reintentando en {int(SYNC_BLOCK_RETRY_DELAY_SECONDS)}s "
+                                    f"reintentando en {int(block_retry_delay_seconds)}s "
                                     f"({retry}/{SYNC_BLOCK_MAX_RETRIES})",
                                     flush=True,
                                 )
-                                await asyncio.sleep(SYNC_BLOCK_RETRY_DELAY_SECONDS)
+                                await asyncio.sleep(block_retry_delay_seconds)
                                 missing = await fetch_readings_range(
                                     host_now,
                                     from_id=chunk_from,
                                     to_id=chunk_to,
-                                    limit=SYNC_CHUNK_SIZE,
+                                    limit=current_chunk_size,
                                     timeout=30.0,
                                 )
                                 missing_data = missing.get('data') if isinstance(missing.get('data'), dict) else None
@@ -517,6 +545,7 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                                     flush=True,
                                 )
                                 break
+                        current_chunk_size = next_chunk_size
                         chunk_to = chunk_from - 1
 
                     if batches >= SYNC_MAX_BATCHES_PER_CYCLE:
@@ -534,7 +563,7 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
                     'fetch_range_summary',
                     host=host_now,
                     batches=batches,
-                    chunk_size=SYNC_CHUNK_SIZE,
+                    chunk_size=current_chunk_size,
                     rows=total_received,
                     inserted=total_inserted,
                     complete=completed_history_sync,
@@ -591,6 +620,85 @@ async def sync_sensor_measurements(device_id: str | None = None, *, fetch_latest
             latest_time_source=(row or {}).get('time_source'),
         )
         return row
+
+
+async def sync_before_csv_download(device_id: str | None = None) -> dict[str, Any]:
+    """Sincroniza histórico bajo demanda antes de permitir descargar CSV."""
+    target_id = (device_id or DEVICE_ID).strip().lower() or DEVICE_ID
+    active = await ensure_device_active(target_id)
+    if not active:
+        return {
+            'ok': False,
+            'device_id': target_id,
+            'error': 'sensor_not_active',
+            'message': 'No se encontró activo el EcoSensor seleccionado; no se descargó el CSV.',
+        }
+
+    try:
+        row = await sync_sensor_measurements(
+            target_id,
+            fetch_latest=True,
+            sync_history=True,
+            user_initiated=True,
+        )
+    except Exception as exc:
+        return {
+            'ok': False,
+            'device_id': target_id,
+            'error': f'sync_failed: {exc}',
+            'message': 'No se pudo sincronizar el historial antes de descargar el CSV.',
+        }
+
+    try:
+        latest_remote_id = int((row or {}).get('measurement_id') or 0)
+    except (TypeError, ValueError):
+        latest_remote_id = 0
+
+    missing_ranges = await asyncio.to_thread(missing_source_id_ranges, target_id, latest_remote_id)
+    pending_count = sum((end_id - start_id + 1) for start_id, end_id in missing_ranges)
+    if pending_count > 0:
+        return {
+            'ok': False,
+            'device_id': target_id,
+            'pending': pending_count,
+            'missing_ranges': missing_ranges,
+            'latest_remote_id': latest_remote_id,
+            'message': 'Aún existen datos pendientes por sincronizar; no se generó el CSV.',
+        }
+
+    return {
+        'ok': True,
+        'device_id': target_id,
+        'pending': 0,
+        'latest_remote_id': latest_remote_id,
+        'message': 'Historial sincronizado. Iniciando descarga CSV.',
+    }
+
+
+def schedule_preventive_history_sync(device_id: str | None, *, delay_seconds: float = 2.0) -> None:
+    """Agenda una sincronización histórica preventiva sin bloquear al usuario.
+
+    Se usa tras recibir push o detectar actividad. Evita lanzar trabajos
+    repetidos para el mismo EcoSensor y deja que el lock existente serialize
+    contra descargas CSV o ciclos automáticos.
+    """
+    target_id = (device_id or DEVICE_ID).strip().lower() or DEVICE_ID
+    now = monotonic()
+    if now - _last_preventive_sync_at.get(target_id, 0.0) < SYNC_PREVENTIVE_MIN_INTERVAL_SECONDS:
+        return
+    existing = _preventive_sync_tasks.get(target_id)
+    if existing and not existing.done():
+        return
+
+    async def _run() -> None:
+        try:
+            await asyncio.sleep(delay_seconds)
+            _last_preventive_sync_at[target_id] = monotonic()
+            await sync_sensor_measurements(target_id, fetch_latest=True, sync_history=True)
+        except Exception as exc:
+            record_sync_event(target_id, 'preventive_sync_error', error=str(exc)[:220])
+
+    _preventive_sync_tasks[target_id] = asyncio.create_task(_run())
 
 
 async def sync_latest_measurements(device_id: str | None = None) -> dict[str, Any] | None:

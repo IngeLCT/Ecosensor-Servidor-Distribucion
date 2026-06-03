@@ -17,7 +17,7 @@ from fastapi import Query, Request
 from fastapi.responses import JSONResponse, Response
 from nicegui import app, ui
 from services.device_registry import active_devices, mark_device_seen, probe_failures, remember_host
-from services.measurement_sync import background_sync_loop, is_history_syncing
+from services.measurement_sync import background_sync_loop, is_history_syncing, schedule_preventive_history_sync, sync_before_csv_download
 from services.mdns_service import start_mdns_service
 from shared.formatters import row_from_payload
 from storage.measurements_store import graph_latest_row, graph_rows_history, graph_rows_since, measurements_csv_text, save_measurement
@@ -104,12 +104,19 @@ async def api_measurements_push(request: Request) -> JSONResponse:
     )
 
     inserted = await asyncio.to_thread(save_measurement, host, row)
+    schedule_preventive_history_sync(device_id)
     return JSONResponse({
         'ok': True,
         'inserted': inserted,
         'device_id': device_id,
         'measurement_id': row.get('measurement_id'),
     })
+
+
+@app.post('/api/measurements/sync-before-download')
+async def api_sync_before_download(device_id: str | None = Query(default=None)) -> JSONResponse:
+    result = await sync_before_csv_download(device_id)
+    return JSONResponse(result, status_code=200 if result.get('ok') else 409)
 
 
 @app.get('/api/measurements.csv')
