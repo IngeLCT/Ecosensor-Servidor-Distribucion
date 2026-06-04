@@ -26,7 +26,7 @@ from storage.measurements_store import graph_latest_row, graph_rows_history, gra
 
 def _register_pages() -> None:
     """Carga módulos de páginas NiceGUI que registran rutas al importarse."""
-    for module_name in ('pages.connect_page', 'pages.dashboard_page', 'pages.graphs_page'):
+    for module_name in ('pages.connect_page', 'pages.dashboard_page', 'pages.graphs_page', 'pages.locations_page'):
         importlib.import_module(module_name)
 
 

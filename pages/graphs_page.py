@@ -85,9 +85,11 @@ def _nav() -> None:
         ui.label('|')
         ui.link('Gráficas VOC & NOx', '/graficas/voc-nox')
         ui.label('|')
-        ui.link('Gráficas CO2, Temperatura & Humedad', '/graficas/ambientales')
-        ui.label('|')
         ui.link('Gráficas del Historial', '/graficas/historial')
+        ui.label('|')
+        ui.link('Ubicaciones', '/ubicaciones')
+        ui.label('|')
+        ui.link('Gráficas CO2, Temperatura & Humedad', '/graficas/ambientales')
         ui.label('|')
 
 

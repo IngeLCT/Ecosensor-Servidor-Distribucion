@@ -5,11 +5,11 @@ from typing import Any
 
 from config import DEVICE_ID
 from services.device_registry import (
-    active_devices,
     device_id_from_host,
     ensure_active_devices,
     ensure_device_active,
     host_for_device,
+    recently_seen_devices,
     refresh_active_devices,
 )
 from services.esp_client import build_endpoints, configure_push_host, fetch_json, fetch_readings_export, fetch_readings_range, sync_time_if_needed
@@ -45,6 +45,7 @@ SYNC_BLOCK_RETRY_DELAY_SECONDS = 10.0
 SYNC_BLOCK_MAX_RETRIES = 1
 PUSH_HOST_GRACE_SECONDS = 120
 DEFAULT_MEASUREMENT_WINDOW_SECONDS = 300
+BACKGROUND_SYNC_FRESH_DEVICE_SECONDS = 75
 
 
 def summarize_response(response: dict[str, Any] | None) -> dict[str, Any]:
@@ -929,9 +930,14 @@ async def sync_latest_measurements(device_id: str | None = None) -> dict[str, An
 
 
 async def sync_all_active_measurements() -> list[dict[str, Any] | None]:
-    """Sincroniza todos los EcoSensor activos sin depender de que haya UI abierta."""
+    """Sincroniza solo EcoSensores confirmados en el refresco reciente.
+
+    La lista activa puede conservar sensores por TTL para que la UI no parpadee
+    ante un fallo puntual de mDNS, pero el loop automático no debe seguir
+    consultando sensores desconectados o no confirmados en el ciclo actual.
+    """
     await refresh_active_devices()
-    devices = active_devices()
+    devices = recently_seen_devices(BACKGROUND_SYNC_FRESH_DEVICE_SECONDS)
     if not devices:
         return []
     return await asyncio.gather(

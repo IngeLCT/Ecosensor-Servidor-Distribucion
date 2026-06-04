@@ -1,5 +1,5 @@
 nicegui>=2.0.0
 fastapi>=0.115.0
 zeroconf>=0.132.0
-plotly>=5.0.0
+plotly==6.8.0
 pandas>=2.0.0

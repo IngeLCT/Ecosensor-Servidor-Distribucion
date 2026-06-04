@@ -351,6 +351,11 @@ def _graph_row(row: sqlite3.Row) -> dict[str, Any]:
         'scd_hum': _round2_or_none(row['scd_hum']) if 'scd_hum' in row.keys() else None,
         'sen_temp': _round2_or_none(row['sen_temp']) if 'sen_temp' in row.keys() else None,
         'sen_hum': _round2_or_none(row['sen_hum']) if 'sen_hum' in row.keys() else None,
+        'gps_valid': bool(row['gps_valid']) if 'gps_valid' in row.keys() and row['gps_valid'] is not None else None,
+        'gps_lat': _float_or_none(row['gps_lat']) if 'gps_lat' in row.keys() else None,
+        'gps_lon': _float_or_none(row['gps_lon']) if 'gps_lon' in row.keys() else None,
+        'gps_satellites': _int_or_none(row['gps_satellites']) if 'gps_satellites' in row.keys() else None,
+        'gps_hdop': _round2_or_none(row['gps_hdop']) if 'gps_hdop' in row.keys() else None,
     }
 
 

@@ -12,8 +12,11 @@ from services.esp_client import build_endpoints, fetch_json_sync, normalize_host
 from shared.formatters import device_display_name
 from storage.settings_store import load_settings, save_settings
 
-# Un EcoSensor no debe desaparecer por un fallo puntual de mDNS/red.
-ACTIVE_TTL_SECONDS = 300
+# Un EcoSensor no debe desaparecer por un fallo puntual de mDNS/red, pero el
+# servidor tampoco debe seguir tratándolo como presente varios minutos después
+# de desconectarlo. Con el loop de 60 s, 90 s tolera un fallo puntual y limpia
+# el dispositivo en el siguiente ciclo real.
+ACTIVE_TTL_SECONDS = 90
 DISCOVERY_MAX_DEVICE_NUMBER = 12
 DISCOVERY_REFRESH_INTERVAL_SECONDS = 20
 CONFIGURED_PROBE_TIMEOUT_SECONDS = 0.7
@@ -428,6 +431,25 @@ def active_devices() -> list[dict[str, Any]]:
         if not _is_real_ecosensor_id(device_id):
             _active_devices.pop(device_id, None)
     return sorted(_active_devices.values(), key=lambda item: item.get('device_id') or '')
+
+
+def recently_seen_devices(max_age_seconds: float) -> list[dict[str, Any]]:
+    """Devuelve solo EcoSensores confirmados recientemente.
+
+    La UI puede conservar dispositivos por TTL para evitar parpadeos por mDNS,
+    pero el ciclo automático de sincronización debe ser más estricto: si el
+    refresco actual no pudo confirmar un sensor, no debe intentar sincronizarlo.
+    """
+    now = datetime.now()
+    fresh: list[dict[str, Any]] = []
+    for item in active_devices():
+        try:
+            last_seen = datetime.fromisoformat(str(item.get('last_seen') or ''))
+        except ValueError:
+            continue
+        if now - last_seen <= timedelta(seconds=max_age_seconds):
+            fresh.append(item)
+    return fresh
 
 
 def active_device_options() -> dict[str, str]:
