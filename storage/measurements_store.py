@@ -227,13 +227,13 @@ def get_latest_measurement(device_id: str | None = None) -> dict[str, Any] | Non
                    gps_valid, gps_lat, gps_lon, gps_satellites, gps_hdop, gps_age_ms, window_s
             FROM measurements
             ORDER BY
-                CASE WHEN COALESCE(device_timestamp, '') != '' THEN 0 ELSE 1 END,
+                CASE WHEN source_id IS NOT NULL THEN 0 ELSE 1 END,
+                source_id DESC,
+                id DESC,
                 COALESCE(
                     datetime(replace(replace(substr(device_timestamp, 1, 19), 'T', ' '), 'Z', '')),
                     datetime(replace(replace(substr(received_at, 1, 19), 'T', ' '), 'Z', ''))
-                ) DESC,
-                COALESCE(source_id, id) DESC,
-                id DESC
+                ) DESC
             LIMIT 1
             '''
         ).fetchone()
@@ -366,13 +366,13 @@ def graph_latest_row(device_id: str | None = None) -> dict[str, Any] | None:
                    voc, nox, co2, temp, hum
             FROM measurements
             ORDER BY
-                CASE WHEN COALESCE(device_timestamp, '') != '' THEN 0 ELSE 1 END,
+                CASE WHEN source_id IS NOT NULL THEN 0 ELSE 1 END,
+                source_id DESC,
+                id DESC,
                 COALESCE(
                     datetime(replace(replace(substr(device_timestamp, 1, 19), 'T', ' '), 'Z', '')),
                     datetime(replace(replace(substr(received_at, 1, 19), 'T', ' '), 'Z', ''))
-                ) DESC,
-                COALESCE(source_id, id) DESC,
-                id DESC
+                ) DESC
             LIMIT 1
             '''
         ).fetchone()
