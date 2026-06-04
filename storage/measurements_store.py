@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS measurements (
     scd_hum REAL,
     sen_temp REAL,
     sen_hum REAL,
+    gps_valid INTEGER,
+    gps_lat REAL,
+    gps_lon REAL,
+    gps_satellites INTEGER,
+    gps_hdop REAL,
+    gps_age_ms INTEGER,
     window_s INTEGER
 );
 '''
@@ -80,6 +86,18 @@ def ensure_db(device_id: str | None = None) -> None:
             conn.execute('ALTER TABLE measurements ADD COLUMN sen_temp REAL')
         if 'sen_hum' not in columns:
             conn.execute('ALTER TABLE measurements ADD COLUMN sen_hum REAL')
+        if 'gps_valid' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN gps_valid INTEGER')
+        if 'gps_lat' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN gps_lat REAL')
+        if 'gps_lon' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN gps_lon REAL')
+        if 'gps_satellites' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN gps_satellites INTEGER')
+        if 'gps_hdop' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN gps_hdop REAL')
+        if 'gps_age_ms' not in columns:
+            conn.execute('ALTER TABLE measurements ADD COLUMN gps_age_ms INTEGER')
         conn.execute(
             '''
             CREATE UNIQUE INDEX IF NOT EXISTS idx_measurements_device_timestamp
@@ -185,6 +203,12 @@ def _measurement_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         'scd_hum': _round2_or_none(row['scd_hum']) if 'scd_hum' in row.keys() else None,
         'sen_temp': _round2_or_none(row['sen_temp']) if 'sen_temp' in row.keys() else None,
         'sen_hum': _round2_or_none(row['sen_hum']) if 'sen_hum' in row.keys() else None,
+        'gps_valid': bool(row['gps_valid']) if 'gps_valid' in row.keys() and row['gps_valid'] is not None else None,
+        'gps_lat': _float_or_none(row['gps_lat']) if 'gps_lat' in row.keys() else None,
+        'gps_lon': _float_or_none(row['gps_lon']) if 'gps_lon' in row.keys() else None,
+        'gps_satellites': _int_or_none(row['gps_satellites']) if 'gps_satellites' in row.keys() else None,
+        'gps_hdop': _round2_or_none(row['gps_hdop']) if 'gps_hdop' in row.keys() else None,
+        'gps_age_ms': _int_or_none(row['gps_age_ms']) if 'gps_age_ms' in row.keys() else None,
         'window_s': row['window_s'],
     }
 
@@ -199,7 +223,8 @@ def get_latest_measurement(device_id: str | None = None) -> dict[str, Any] | Non
             SELECT device_id, host, device_timestamp, received_at, source_id,
                    boot_id, uptime_s, time_valid, time_source,
                    pm1p0, pm2p5, pm4p0, pm10p0,
-                   voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum, window_s
+                   voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum,
+                   gps_valid, gps_lat, gps_lon, gps_satellites, gps_hdop, gps_age_ms, window_s
             FROM measurements
             ORDER BY
                 CASE WHEN COALESCE(device_timestamp, '') != '' THEN 0 ELSE 1 END,
@@ -389,7 +414,7 @@ def graph_rows_all(device_id: str | None = None) -> list[dict[str, Any]]:
             '''
             SELECT id, source_id, device_id, device_timestamp,
                    pm1p0, pm2p5, pm4p0, pm10p0,
-                   voc, nox, co2, temp, hum
+                   voc, nox, co2, temp, hum, gps_valid, gps_lat, gps_lon, gps_satellites, gps_hdop
             FROM measurements
             ORDER BY COALESCE(source_id, id) ASC, id ASC
             '''
@@ -655,6 +680,7 @@ def measurements_csv_text(device_id: str | None = None) -> str:
         'id', 'device_id', 'Fecha de medicion', 'Hora de medicion',
         'PM1.0', 'PM2.5', 'PM4.0', 'PM10.0',
         'VOC', 'NOx', 'CO2', 'Temperatura', 'Humedad',
+        'GPS valido', 'Latitud', 'Longitud', 'Satellites GPS', 'HDOP GPS',
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
@@ -665,7 +691,8 @@ def measurements_csv_text(device_id: str | None = None) -> str:
             '''
             SELECT id, source_id, device_id, device_timestamp,
                    pm1p0, pm2p5, pm4p0, pm10p0,
-                   voc, nox, co2, temp, hum
+                   voc, nox, co2, temp, hum,
+                   gps_valid, gps_lat, gps_lon, gps_satellites, gps_hdop
             FROM measurements
             ORDER BY COALESCE(source_id, id) ASC, id ASC
             '''
@@ -686,6 +713,11 @@ def measurements_csv_text(device_id: str | None = None) -> str:
                 'CO2': _csv_int(row['co2']),
                 'Temperatura': _csv_decimal(row['temp']),
                 'Humedad': _csv_int(row['hum']),
+                'GPS valido': '1' if row['gps_valid'] else '0' if row['gps_valid'] is not None else '',
+                'Latitud': '' if row['gps_lat'] is None else f"{float(row['gps_lat']):.6f}",
+                'Longitud': '' if row['gps_lon'] is None else f"{float(row['gps_lon']):.6f}",
+                'Satellites GPS': _csv_int(row['gps_satellites']),
+                'HDOP GPS': _csv_decimal(row['gps_hdop']),
             })
 
     return output.getvalue()
@@ -749,12 +781,14 @@ INSERT OR IGNORE INTO measurements (
     device_id, host, device_timestamp, received_at, source_id,
     boot_id, uptime_s, time_valid, time_source,
     pm1p0, pm2p5, pm4p0, pm10p0,
-    voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum, window_s
+    voc, nox, co2, temp, hum, scd_temp, scd_hum, sen_temp, sen_hum,
+    gps_valid, gps_lat, gps_lon, gps_satellites, gps_hdop, gps_age_ms, window_s
 ) VALUES (
     :device_id, :host, :device_timestamp, :received_at, :source_id,
     :boot_id, :uptime_s, :time_valid, :time_source,
     :pm1p0, :pm2p5, :pm4p0, :pm10p0,
-    :voc, :nox, :co2, :temp, :hum, :scd_temp, :scd_hum, :sen_temp, :sen_hum, :window_s
+    :voc, :nox, :co2, :temp, :hum, :scd_temp, :scd_hum, :sen_temp, :sen_hum,
+    :gps_valid, :gps_lat, :gps_lon, :gps_satellites, :gps_hdop, :gps_age_ms, :window_s
 )
 '''
 
@@ -780,6 +814,12 @@ SET host = :host,
     scd_hum = COALESCE(:scd_hum, scd_hum),
     sen_temp = COALESCE(:sen_temp, sen_temp),
     sen_hum = COALESCE(:sen_hum, sen_hum),
+    gps_valid = COALESCE(:gps_valid, gps_valid),
+    gps_lat = COALESCE(:gps_lat, gps_lat),
+    gps_lon = COALESCE(:gps_lon, gps_lon),
+    gps_satellites = COALESCE(:gps_satellites, gps_satellites),
+    gps_hdop = COALESCE(:gps_hdop, gps_hdop),
+    gps_age_ms = COALESCE(:gps_age_ms, gps_age_ms),
     window_s = COALESCE(:window_s, window_s)
 WHERE device_id = :device_id AND source_id = :source_id
   AND (
@@ -827,6 +867,12 @@ def _measurement_values(host: str, row: dict[str, Any], received_at: str | None 
         'scd_hum': _round2_or_none(row.get('scd_hum')),
         'sen_temp': _round2_or_none(row.get('sen_temp')),
         'sen_hum': _round2_or_none(row.get('sen_hum')),
+        'gps_valid': None if _bool_or_none(row.get('gps_valid')) is None else int(bool(_bool_or_none(row.get('gps_valid')))),
+        'gps_lat': _float_or_none(row.get('gps_lat')),
+        'gps_lon': _float_or_none(row.get('gps_lon')),
+        'gps_satellites': _int_or_none(row.get('gps_satellites')),
+        'gps_hdop': _round2_or_none(row.get('gps_hdop')),
+        'gps_age_ms': _int_or_none(row.get('gps_age_ms')),
         'window_s': _int_or_none(row.get('window_s')),
     }
 

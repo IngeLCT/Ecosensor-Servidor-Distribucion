@@ -51,6 +51,12 @@ def row_from_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
         'scd_hum': _round2_or_none(payload.get('scd_hum')),
         'sen_temp': _round2_or_none(payload.get('sen_temp')),
         'sen_hum': _round2_or_none(payload.get('sen_hum')),
+        'gps_valid': payload.get('gps_valid'),
+        'gps_lat': _float_or_none(payload.get('gps_lat')),
+        'gps_lon': _float_or_none(payload.get('gps_lon')),
+        'gps_satellites': _int_or_none(payload.get('gps_satellites')),
+        'gps_hdop': _round2_or_none(payload.get('gps_hdop')),
+        'gps_age_ms': _int_or_none(payload.get('gps_age_ms')),
         'window_s': payload.get('window_s'),
     }
 
