@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from config import UI_PORT
+from shared.time_utils import server_local_now, server_local_now_naive
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -254,7 +255,7 @@ def _time_drift_seconds(status_data: dict[str, Any]) -> int | None:
         status_data.get('last_measurement_timestamp'),
     )
     drifts: list[int] = []
-    now = datetime.now()
+    now = server_local_now_naive()
     for value in candidates:
         device_dt = _parse_device_datetime(value)
         if device_dt is not None:
@@ -427,7 +428,7 @@ async def autoconnect_and_sync(saved_host: str, default_host: str) -> dict[str, 
 
 
 def system_datetime_payload(target_host: str | None = None) -> dict[str, str]:
-    now = datetime.now().astimezone()
+    now = server_local_now()
     payload = {
         'date': now.strftime('%d-%m-%Y'),
         'time': now.strftime('%H:%M:%S'),

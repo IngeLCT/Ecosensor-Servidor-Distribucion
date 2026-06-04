@@ -19,6 +19,7 @@ UI_HOST = os.getenv('ECOSENSOR_SERVER_HOST', '0.0.0.0')
 UI_PORT = int(os.getenv('ECOSENSOR_SERVER_PORT', '8765'))
 MDNS_HOSTNAME = os.getenv('ECOSENSOR_MDNS_HOSTNAME', 'ecosensor-servidor')
 MDNS_SERVICE_TYPE = '_http._tcp.local.'
+LOCAL_TIMEZONE = os.getenv('ECOSENSOR_TIMEZONE', '').strip()
 
 DEFAULT_ESP_HOST = f'{DEVICE_ID}.local'
 

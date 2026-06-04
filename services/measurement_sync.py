@@ -14,6 +14,7 @@ from services.device_registry import (
 )
 from services.esp_client import build_endpoints, configure_push_host, fetch_json, fetch_readings_export, fetch_readings_range, sync_time_if_needed
 from shared.formatters import row_from_payload
+from shared.time_utils import server_local_now, to_server_local_naive
 from storage.measurements_store import (
     get_latest_measurement,
     latest_source_id,
@@ -74,7 +75,7 @@ def _lock_for(device_id: str) -> asyncio.Lock:
 
 def _iso_local(dt: datetime) -> str:
     """Devuelve fecha/hora local del servidor, sin marcarla como UTC."""
-    return dt.astimezone().replace(tzinfo=None).isoformat(timespec='seconds')
+    return to_server_local_naive(dt).isoformat(timespec='seconds')
 
 
 def _bool_or_none(value: Any) -> bool | None:
@@ -115,6 +116,48 @@ def _enrich_time_metadata(item: dict[str, Any], current_uptime_s: Any, server_no
     item['timestamp'] = _iso_local(estimated)
 
 
+def _apply_status_latest_timestamp(item: dict[str, Any], status_data: Any) -> bool:
+    """Usa /status como fuente de hora para la última medición antes de estimar.
+
+    En firmwares anteriores, /lecturas puede llegar sin timestamp confiable y el
+    servidor termina estimando con la hora local del PC. /status, en cambio,
+    reporta last_measurement_timestamp para la misma última medición guardada.
+    """
+    if not isinstance(status_data, dict):
+        return False
+    status_timestamp = str(status_data.get('last_measurement_timestamp') or '').strip()
+    if not status_timestamp:
+        return False
+    if _bool_or_none(status_data.get('last_measurement_time_valid')) is False:
+        return False
+
+    try:
+        item_id = int(item.get('measurement_id') or item.get('id') or 0)
+    except (TypeError, ValueError):
+        item_id = 0
+    try:
+        status_id = int(status_data.get('last_measurement_id') or 0)
+    except (TypeError, ValueError):
+        status_id = 0
+    if item_id > 0 and status_id > 0 and item_id != status_id:
+        return False
+
+    current_source = str(item.get('time_source') or '').lower()
+    current_timestamp = str(item.get('timestamp') or '').strip()
+    should_replace = not current_timestamp or current_source.startswith('estimated') or current_source in {'pending_estimate', 'invalid_history_time'}
+    if not should_replace:
+        return False
+
+    item['timestamp'] = status_timestamp
+    item['time_valid'] = True
+    item['time_source'] = 'esp_live'
+    if status_data.get('boot_id') is not None and item.get('boot_id') is None:
+        item['boot_id'] = status_data.get('boot_id')
+    if status_data.get('last_measurement_uptime_s') is not None and item.get('uptime_s') is None:
+        item['uptime_s'] = status_data.get('last_measurement_uptime_s')
+    return True
+
+
 
 def _parse_dt(value: Any) -> datetime | None:
     text = str(value or '').strip()
@@ -142,7 +185,7 @@ def _push_overdue(row: dict[str, Any] | None) -> tuple[bool, int, int]:
     except (TypeError, ValueError):
         window_s = DEFAULT_MEASUREMENT_WINDOW_SECONDS
     window_s = max(60, window_s)
-    age_s = int((datetime.now().astimezone() - last_seen).total_seconds())
+    age_s = int((server_local_now() - last_seen).total_seconds())
     return age_s > window_s + PUSH_HOST_GRACE_SECONDS, age_s, window_s
 
 
@@ -228,7 +271,7 @@ async def _save_remote_rows(
     inserted_count = 0
     min_seen_source_id = 0
     max_seen_source_id = 0
-    server_now = datetime.now().astimezone()
+    server_now = server_local_now()
     last_estimated: datetime | None = None
 
     prepared_rows: list[dict[str, Any]] = []
@@ -379,7 +422,8 @@ async def sync_sensor_measurements(
                     if row:
                         row['device_id'] = selected_device_id
                         row['id'] = selected_device_id
-                        _enrich_time_metadata(row, data.get('current_uptime_s'), datetime.now().astimezone(), data.get('boot_id'))
+                        _apply_status_latest_timestamp(row, status_data)
+                        _enrich_time_metadata(row, data.get('current_uptime_s'), server_local_now(), data.get('boot_id'))
                         if row.get('time_source') == 'esp':
                             row['time_source'] = 'esp_live'
                         try:
