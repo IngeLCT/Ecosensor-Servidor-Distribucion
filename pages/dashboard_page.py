@@ -70,8 +70,6 @@ def dashboard(request: Request, client: Client) -> None:
             ('CO2', format_value(row.get('co2'), 0), 'ppm'),
             ('Temperatura', format_value(row.get('temp')), 'C'),
             ('Humedad Relativa', format_value(row.get('hum'), 0), '%'),
-            ('Latitud GPS', format_value(row.get('gps_lat'), 6), '°'),
-            ('Longitud GPS', format_value(row.get('gps_lon'), 6), '°'),
         ]
         html_rows = ''.join(f'<tr><td>{name}</td><td>{value}</td><td>{unit}</td></tr>' for name, value, unit in rows)
         table.set_content(

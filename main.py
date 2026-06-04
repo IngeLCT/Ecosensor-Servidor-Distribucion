@@ -88,6 +88,11 @@ async def api_measurements_push(request: Request) -> JSONResponse:
         remember_host(client_host, device_id)
     mark_device_seen(device_id, host, {'device_id': device_id, 'ip': client_host})
 
+    gps_valid = bool(row.get('gps_valid'))
+    gps_lat = row.get('gps_lat') if gps_valid else None
+    gps_lon = row.get('gps_lon') if gps_valid else None
+    gps_text = f"GPS=valid lat={gps_lat:.6f} lon={gps_lon:.6f}" if gps_lat is not None and gps_lon is not None else 'GPS=sin_fix'
+
     print(
         '[push_measurement] '
         f"{device_id} | "
@@ -101,7 +106,8 @@ async def api_measurements_push(request: Request) -> JSONResponse:
         f"NOx={row.get('nox')} | "
         f"CO2={row.get('co2')} | "
         f"Temperatura={row.get('temp')} | "
-        f"Humedad={row.get('hum')}",
+        f"Humedad={row.get('hum')} | "
+        f"{gps_text}",
         flush=True,
     )
 

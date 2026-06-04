@@ -844,6 +844,14 @@ def _measurement_values(host: str, row: dict[str, Any], received_at: str | None 
         time_valid,
         source_id,
     )
+    gps_valid_value = _bool_or_none(row.get('gps_valid'))
+    gps_valid = None if gps_valid_value is None else int(bool(gps_valid_value))
+    gps_lat = _float_or_none(row.get('gps_lat'))
+    gps_lon = _float_or_none(row.get('gps_lon'))
+    if not gps_valid:
+        gps_lat = None
+        gps_lon = None
+
     return {
         'device_id': device_id,
         'host': host,
@@ -867,9 +875,9 @@ def _measurement_values(host: str, row: dict[str, Any], received_at: str | None 
         'scd_hum': _round2_or_none(row.get('scd_hum')),
         'sen_temp': _round2_or_none(row.get('sen_temp')),
         'sen_hum': _round2_or_none(row.get('sen_hum')),
-        'gps_valid': None if _bool_or_none(row.get('gps_valid')) is None else int(bool(_bool_or_none(row.get('gps_valid')))),
-        'gps_lat': _float_or_none(row.get('gps_lat')),
-        'gps_lon': _float_or_none(row.get('gps_lon')),
+        'gps_valid': gps_valid,
+        'gps_lat': gps_lat,
+        'gps_lon': gps_lon,
         'gps_satellites': _int_or_none(row.get('gps_satellites')),
         'gps_hdop': _round2_or_none(row.get('gps_hdop')),
         'gps_age_ms': _int_or_none(row.get('gps_age_ms')),
