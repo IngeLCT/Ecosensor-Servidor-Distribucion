@@ -621,6 +621,80 @@ def repair_historical_invalid_timestamps(
                 repaired += int(cursor.rowcount or 0)
 
         conn.commit()
+
+        # Segunda pasada defensiva: garantiza monotonía por source_id.
+        # Si una medición anterior quedó con hora igual/posterior a la siguiente,
+        # se reconstruye hacia atrás usando window_s. Esto corrige bloques largos
+        # adelantados que no siempre quedan cubiertos por la detección por anclas.
+        if source_from is not None and source_to is not None:
+            rows = conn.execute(
+                '''
+                WITH scoped AS (
+                    SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+                    FROM measurements
+                    WHERE source_id BETWEEN ? AND ?
+                    UNION ALL
+                    SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+                    FROM measurements
+                    WHERE source_id = (
+                        SELECT MAX(source_id) FROM measurements WHERE source_id < ?
+                    )
+                    UNION ALL
+                    SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+                    FROM measurements
+                    WHERE source_id = (
+                        SELECT MIN(source_id) FROM measurements WHERE source_id > ?
+                    )
+                )
+                SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+                FROM scoped
+                WHERE source_id IS NOT NULL
+                GROUP BY id
+                ORDER BY source_id ASC, id ASC
+                ''',
+                (source_from, source_to, source_from, source_to),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                '''
+                SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+                FROM measurements
+                WHERE source_id IS NOT NULL
+                ORDER BY source_id ASC, id ASC
+                '''
+            ).fetchall()
+
+        next_valid_dt: datetime | None = None
+        monotonic_updates: list[tuple[str, str, int]] = []
+        for row in reversed(rows):
+            parsed = _parse_timestamp_local(row['device_timestamp'])
+            if parsed is None:
+                continue
+            if next_valid_dt is not None and parsed >= next_valid_dt:
+                try:
+                    step = max(1, int(row['window_s'] or 300))
+                except (TypeError, ValueError):
+                    step = 300
+                parsed = next_valid_dt - timedelta(seconds=step)
+                monotonic_updates.append((parsed.isoformat(timespec='seconds'), HISTORICAL_BACKFILLED_SOURCE, row['id']))
+            next_valid_dt = parsed
+
+        for timestamp, source, row_id in monotonic_updates:
+            cursor = conn.execute(
+                '''
+                UPDATE measurements
+                SET device_timestamp = ?, time_valid = 1, time_source = ?
+                WHERE id = ?
+                  AND (
+                    COALESCE(device_timestamp, '') != ?
+                    OR COALESCE(time_valid, -1) != 1
+                    OR COALESCE(time_source, '') != ?
+                  )
+                ''',
+                (timestamp, source, row_id, timestamp, source),
+            )
+            repaired += int(cursor.rowcount or 0)
+        conn.commit()
     return repaired
 
 
@@ -675,6 +749,7 @@ def repair_future_estimated_timestamps(device_id: str | None = None) -> int:
 def measurements_csv_text(device_id: str | None = None) -> str:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
+    repair_historical_invalid_timestamps(device_id)
     output = io.StringIO()
     fieldnames = [
         'id', 'device_id', 'Fecha de medicion', 'Hora de medicion',

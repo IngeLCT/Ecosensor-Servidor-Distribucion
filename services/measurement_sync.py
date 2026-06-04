@@ -762,6 +762,10 @@ async def sync_sensor_measurements(
                         break
 
                 completed_history_sync = batches < SYNC_MAX_BATCHES_PER_CYCLE
+                if completed_history_sync:
+                    full_repaired = await asyncio.to_thread(repair_historical_invalid_timestamps, selected_device_id)
+                    if full_repaired:
+                        historical_repaired += full_repaired
                 if historical_repaired:
                     print(
                         f"[measurement_sync] {selected_device_id}: fechas historicas reparadas: {historical_repaired}",
@@ -858,6 +862,8 @@ async def sync_before_csv_download(device_id: str | None = None) -> dict[str, An
             'error': f'sync_failed: {exc}',
             'message': 'No se pudo sincronizar el historial antes de descargar el CSV.',
         }
+
+    await asyncio.to_thread(repair_historical_invalid_timestamps, target_id)
 
     try:
         latest_remote_id = int((row or {}).get('measurement_id') or 0)
