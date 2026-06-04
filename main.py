@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from nicegui import app, ui
 from services.device_registry import active_devices, mark_device_seen, probe_failures, remember_host
 from services.measurement_sync import background_sync_loop, is_history_syncing, schedule_preventive_history_sync, sync_before_csv_download
+from services.main_window import open_main_browser
 from services.mdns_service import start_mdns_service
 from shared.formatters import row_from_payload
 from storage.measurements_store import graph_latest_row, graph_rows_history, graph_rows_since, measurements_csv_text, save_measurement
@@ -45,6 +46,7 @@ def _start_background_sync() -> None:
 
 
 app.on_startup(_start_background_sync)
+app.on_startup(open_main_browser)
 
 
 @app.get('/api/devices')
@@ -155,4 +157,12 @@ def graph_read(
 
 
 start_mdns_service()
-ui.run(host=UI_HOST, port=UI_PORT, title='EcoSensor Servidor', reload=False, storage_secret='ecosensor-servidor-local')
+ui.run(
+    host=UI_HOST,
+    port=UI_PORT,
+    title='EcoSensor Servidor',
+    reload=False,
+    show=False,
+    reconnect_timeout=2.0,
+    storage_secret='ecosensor-servidor-local',
+)

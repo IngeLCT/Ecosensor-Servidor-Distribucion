@@ -1,9 +1,11 @@
 import asyncio
 from typing import Any
 
-from nicegui import app, ui
+from fastapi import Request
+from nicegui import Client, app, ui
 
 from services.device_registry import active_device_options, ensure_active_devices, registry_revision
+from services.main_window import register_main_window
 from services.measurement_sync import schedule_preventive_history_sync, sync_before_csv_download, sync_sensor_measurements
 from shared.formatters import format_value
 from storage.measurements_store import get_latest_measurement
@@ -12,7 +14,8 @@ from pages.pollutants_modal import pollutants_info_card
 
 
 @ui.page('/dashboard')
-def dashboard() -> None:
+def dashboard(request: Request, client: Client) -> None:
+    register_main_window(request, client)
     ui.page_title('EcoSensor Mediciones')
     add_styles()
 
