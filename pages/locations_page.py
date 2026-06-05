@@ -369,6 +369,10 @@ def locations_page() -> None:
         except ModuleNotFoundError as exc:
             status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly"}')
             return
+        except Exception as exc:
+            status.set_text(f'No se pudo dibujar el mapa: {exc}')
+            table.set_content(_render_measurements_table(None))
+            return
 
         if clusters:
             display_name = device_display_name(selected_device_id)
@@ -400,6 +404,9 @@ def locations_page() -> None:
             chart.update()
         except ModuleNotFoundError as exc:
             status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly"}')
+            return
+        except Exception as exc:
+            status.set_text(f'No se pudo actualizar el mapa: {exc}')
             return
         table.set_content(_render_measurements_table(clusters[selected_cluster_index]))
 
