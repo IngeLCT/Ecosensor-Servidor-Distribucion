@@ -12,7 +12,6 @@ from shared.styles import add_styles
 from storage.measurements_store import graph_rows_all
 
 CLUSTER_RADIUS_KM = 5.0
-SEARCHING_OPTION = '__searching_ecosensor__'
 
 
 @dataclass
@@ -90,34 +89,33 @@ def _add_location_styles() -> None:
         .locations-map .svg-container {
             height: 620px !important;
         }
-        .locations-table-wrap {
+        .data-table-container {
             width: 100%;
-            max-height: 580px;
+            max-height: 760px;
             overflow: auto;
-            margin-top: 14px;
+            margin-top: 24px;
         }
-        .locations-table-wrap table {
+        .data-table-container table {
             width: 100%;
             border-collapse: separate;
             border-spacing: 0;
-            background: #fff;
         }
-        .locations-table-wrap th,
-        .locations-table-wrap td {
-            border: 1px solid #333;
-            padding: 7px 9px;
-            text-align: center;
-            color: #000;
-            font-size: 14px;
-            white-space: nowrap;
-        }
-        .locations-table-wrap thead th {
+        .data-table-container thead th {
             position: sticky;
             top: 0;
             z-index: 2;
-            background: #e9f4ef;
-            font-weight: bold;
         }
+        .data-table-container th,
+        .data-table-container td {
+            font-size: 20px;
+            text-align: center;
+            border: 1px solid black;
+            border-radius: 10px;
+            padding: 8px;
+            color: #000;
+            white-space: nowrap;
+        }
+        .data-table-container th { background-color: #80ffd4; }
         .locations-summary {
             color: #000;
             font-size: 17px;
@@ -202,9 +200,8 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
     if not clusters:
         fig = go.Figure()
         fig.update_layout(
-            margin=dict(l=0, r=0, t=35, b=0),
+            margin=dict(l=0, r=0, t=0, b=0),
             height=620,
-            title='Sin coordenadas GPS válidas para este EcoSensor',
         )
         return fig
 
@@ -235,9 +232,8 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
         )
     )
     fig.update_layout(
-        title='Ubicaciones agrupadas por radio de 5 km',
         height=620,
-        margin=dict(l=0, r=0, t=42, b=0),
+        margin=dict(l=0, r=0, t=0, b=0),
         map=dict(style='open-street-map', center=dict(lat=center_lat, lon=center_lon), zoom=10),
         clickmode='event+select',
         showlegend=False,
@@ -280,7 +276,7 @@ def _render_measurements_table(cluster: LocationCluster | None) -> str:
     )
     return (
         summary
-        + '<div class="locations-table-wrap"><table>'
+        + '<div class="data-table-container"><table id="uploadTable">'
         + '<thead><tr>'
         + '<th>Fecha</th><th>Hora</th><th>PM1.0</th><th>PM2.5</th><th>PM4.0</th><th>PM10.0</th>'
         + '<th>VOC</th><th>NOx</th><th>CO2</th><th>Temperatura</th><th>Humedad</th>'
@@ -308,9 +304,7 @@ def locations_page() -> None:
             ui.label('EcoSensor®').classes('brand-name')
 
         ui.label('Ubicaciones').classes('section-title dashboard-main-title')
-        with ui.row().classes('items-center justify-center gap-3 history-controls'):
-            ui.label('ID:').classes('section-title')
-            sensor_select = ui.select({}, value=None).props('outlined dense').classes('w-64 device-select')
+        id_label = ui.label('ID: -').classes('section-title')
 
         with ui.element('div').classes('locations-card'):
             status = ui.label('').classes('locations-summary')
@@ -325,21 +319,15 @@ def locations_page() -> None:
         stored_device_id = str(app.storage.user.get('selected_device_id') or '') or None
         if stored_device_id:
             selected_device_id = stored_device_id
-        sensor_select.options = options
         if not options:
             selected_device_id = None
             app.storage.user.pop('selected_device_id', None)
-            sensor_select.options = {SEARCHING_OPTION: 'Buscando ecosensor'}
-            sensor_select.value = SEARCHING_OPTION
-            sensor_select.disable()
-            sensor_select.update()
+            id_label.set_text('ID: -')
             return
-        sensor_select.enable()
         if selected_device_id not in options:
             selected_device_id = next(iter(options))
             app.storage.user['selected_device_id'] = selected_device_id
-        sensor_select.value = selected_device_id
-        sensor_select.update()
+        id_label.set_text(f'ID: {device_display_name(selected_device_id) if selected_device_id else "-"}')
 
     async def refresh_locations() -> None:
         nonlocal clusters, selected_cluster_index
@@ -375,23 +363,10 @@ def locations_page() -> None:
             return
 
         if clusters:
-            display_name = device_display_name(selected_device_id)
-            status.set_text(f'{display_name}: {len(location_rows)} mediciones con GPS válido agrupadas en {len(clusters)} punto(s).')
+            status.set_text('')
         else:
             status.set_text(f'{device_display_name(selected_device_id)} no tiene mediciones con GPS válido todavía.')
         table.set_content(_render_measurements_table(clusters[selected_cluster_index] if selected_cluster_index is not None and selected_cluster_index < len(clusters) else None))
-
-    async def on_sensor_change(event: Any) -> None:
-        nonlocal selected_device_id, selected_cluster_index
-        if event.value == SEARCHING_OPTION:
-            return
-        selected_device_id = str(event.value or '') or None
-        selected_cluster_index = None
-        if selected_device_id:
-            app.storage.user['selected_device_id'] = selected_device_id
-        else:
-            app.storage.user.pop('selected_device_id', None)
-        await refresh_locations()
 
     async def on_map_click(event: events.GenericEventArguments) -> None:
         nonlocal selected_cluster_index
@@ -411,13 +386,17 @@ def locations_page() -> None:
         table.set_content(_render_measurements_table(clusters[selected_cluster_index]))
 
     async def refresh_if_registry_changed() -> None:
+        nonlocal selected_cluster_index
         current = registry_revision()
-        if current != seen_registry_revision['value']:
+        stored_device_id = str(app.storage.user.get('selected_device_id') or '') or None
+        selected_changed = stored_device_id != selected_device_id
+        if current != seen_registry_revision['value'] or selected_changed:
             seen_registry_revision['value'] = current
+            if selected_changed:
+                selected_cluster_index = None
             await refresh_sensor_options()
             await refresh_locations()
 
-    sensor_select.on_value_change(on_sensor_change)
     chart.on('plotly_click', on_map_click)
     ui.timer(1.0, refresh_if_registry_changed)
     ui.timer(0.1, lambda: asyncio.create_task(refresh_sensor_options()), once=True)
