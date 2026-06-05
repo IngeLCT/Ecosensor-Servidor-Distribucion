@@ -37,14 +37,14 @@ class LocationCluster:
         if not self.rows:
             return ''
         row = self.rows[0]
-        return f"{row.get('fecha') or ''} {row.get('hora') or ''}".strip()
+        return f"{_format_date_display(row.get('fecha'))} {row.get('hora') or ''}".strip()
 
     @property
     def last_label(self) -> str:
         if not self.rows:
             return ''
         row = self.rows[-1]
-        return f"{row.get('fecha') or ''} {row.get('hora') or ''}".strip()
+        return f"{_format_date_display(row.get('fecha'))} {row.get('hora') or ''}".strip()
 
     def add(self, row: dict[str, Any], lat: float, lon: float) -> None:
         self.lat_sum += lat
@@ -247,6 +247,16 @@ def _fmt(value: Any, decimals: int = 2) -> str:
     return html.escape(format_value(value, decimals))
 
 
+def _format_date_display(value: Any) -> str:
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    parts = text.split('-', 2)
+    if len(parts) == 3 and len(parts[0]) == 4:
+        return f'{parts[2]}/{parts[1]}/{parts[0]}'
+    return text
+
+
 def _render_measurements_table(cluster: LocationCluster | None) -> str:
     if cluster is None:
         return '<div class="locations-summary">Selecciona un punto en el mapa para ver sus mediciones.</div>'
@@ -255,7 +265,7 @@ def _render_measurements_table(cluster: LocationCluster | None) -> str:
     for row in cluster.rows:
         rows_html.append(
             '<tr>'
-            f'<td>{html.escape(str(row.get("fecha") or ""))}</td>'
+            f'<td>{html.escape(_format_date_display(row.get("fecha")))}</td>'
             f'<td>{html.escape(str(row.get("hora") or ""))}</td>'
             f'<td>{_fmt(row.get("pm1p0"))}</td>'
             f'<td>{_fmt(row.get("pm2p5"))}</td>'
@@ -280,8 +290,8 @@ def _render_measurements_table(cluster: LocationCluster | None) -> str:
         summary
         + '<div class="data-table-container"><table id="uploadTable">'
         + '<thead><tr>'
-        + '<th>Fecha</th><th>Hora</th><th>PM1.0</th><th>PM2.5</th><th>PM4.0</th><th>PM10.0</th>'
-        + '<th>VOC</th><th>NOx</th><th>CO2</th><th>Temperatura</th><th>Humedad</th>'
+        + '<th>Fecha</th><th>Hora</th><th>PM1.0(µg/m³)</th><th>PM2.5(µg/m³)</th><th>PM4.0(µg/m³)</th><th>PM10.0(µg/m³)</th>'
+        + '<th>VOC(index)</th><th>NOx(index)</th><th>CO2(ppm)</th><th>Temperatura(°C)</th><th>Humedad(%)</th>'
         + '</tr></thead><tbody>'
         + ''.join(rows_html)
         + '</tbody></table></div>'
@@ -312,6 +322,7 @@ async def locations_page(request: Request, client: Client) -> None:
         with ui.element('div').classes('locations-card'):
             status = ui.label('').classes('locations-summary')
             chart = ui.plotly({}).classes('locations-map')
+            points_label = ui.label('Puntos marcados: 0').classes('locations-summary')
             table = ui.html('').classes('w-full')
 
     async def refresh_sensor_options() -> None:
@@ -340,6 +351,7 @@ async def locations_page(request: Request, client: Client) -> None:
             status.set_text('No hay EcoSensor seleccionado.')
             chart.figure = _make_map_figure([])
             chart.update()
+            points_label.set_text('Puntos marcados: 0')
             table.set_content(_render_measurements_table(None))
             return
 
@@ -362,9 +374,11 @@ async def locations_page(request: Request, client: Client) -> None:
             return
         except Exception as exc:
             status.set_text(f'No se pudo dibujar el mapa: {exc}')
+            points_label.set_text('Puntos marcados: 0')
             table.set_content(_render_measurements_table(None))
             return
 
+        points_label.set_text(f'Puntos marcados: {len(clusters)}')
         if clusters:
             status.set_text('')
         else:

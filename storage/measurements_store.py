@@ -760,7 +760,7 @@ def measurements_csv_text(device_id: str | None = None) -> str:
         'id', 'device_id', 'Fecha de medicion', 'Hora de medicion',
         'PM1.0', 'PM2.5', 'PM4.0', 'PM10.0',
         'VOC', 'NOx', 'CO2', 'Temperatura', 'Humedad',
-        'GPS valido', 'Latitud', 'Longitud', 'Satellites GPS', 'HDOP GPS',
+        'Latitud', 'Longitud',
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
@@ -772,7 +772,7 @@ def measurements_csv_text(device_id: str | None = None) -> str:
             SELECT id, source_id, device_id, device_timestamp,
                    pm1p0, pm2p5, pm4p0, pm10p0,
                    voc, nox, co2, temp, hum,
-                   gps_valid, gps_lat, gps_lon, gps_satellites, gps_hdop
+                   gps_lat, gps_lon
             FROM measurements
             ORDER BY COALESCE(source_id, id) ASC, id ASC
             '''
@@ -793,11 +793,8 @@ def measurements_csv_text(device_id: str | None = None) -> str:
                 'CO2': _csv_int(row['co2']),
                 'Temperatura': _csv_decimal(row['temp']),
                 'Humedad': _csv_int(row['hum']),
-                'GPS valido': '1' if row['gps_valid'] else '0' if row['gps_valid'] is not None else '',
                 'Latitud': '' if row['gps_lat'] is None else f"{float(row['gps_lat']):.6f}",
                 'Longitud': '' if row['gps_lon'] is None else f"{float(row['gps_lon']):.6f}",
-                'Satellites GPS': _csv_int(row['gps_satellites']),
-                'HDOP GPS': _csv_decimal(row['gps_hdop']),
             })
 
     return output.getvalue()
