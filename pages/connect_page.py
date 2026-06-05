@@ -1,9 +1,10 @@
 from typing import Any
 
 from fastapi import Request
-from nicegui import app, ui
+from nicegui import Client, app, ui
 
 from services.device_registry import active_device_options, ensure_active_devices, ensure_device_active, forget_device, host_for_device, probe_host, registry_revision, remember_host
+from services.main_window import register_main_window
 from services.esp_client import build_endpoints, delete_json, sync_time_if_needed
 from shared.formatters import device_display_name
 from shared.styles import add_styles
@@ -18,12 +19,14 @@ def is_local_request(request: Request) -> bool:
 
 
 @ui.page('/')
-def index() -> None:
+async def index(request: Request, client: Client) -> None:
+    await register_main_window(request, client)
     ui.navigate.to('/dashboard')
 
 
 @ui.page('/config')
-def config_page(request: Request) -> None:
+async def config_page(request: Request, client: Client) -> None:
+    await register_main_window(request, client)
     ui.page_title('Configurar EcoSensor Servidor')
     add_styles()
 

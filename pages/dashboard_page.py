@@ -14,8 +14,8 @@ from pages.pollutants_modal import pollutants_info_card
 
 
 @ui.page('/dashboard')
-def dashboard(request: Request, client: Client) -> None:
-    register_main_window(request, client)
+async def dashboard(request: Request, client: Client) -> None:
+    await register_main_window(request, client)
     ui.page_title('EcoSensor Mediciones')
     add_styles()
 

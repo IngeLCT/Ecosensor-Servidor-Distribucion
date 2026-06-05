@@ -1,12 +1,14 @@
 """Control de la ventana local principal del servidor portable.
 
-La app abre una URL local con token de un solo proceso. La pestaña se marca como
-ventana principal para identificar el arranque local, pero por defecto no apaga el
-servidor al cerrarse: una recarga, navegación o desconexión del websocket de
-NiceGUI también puede disparar el evento de eliminación del cliente.
+La app abre una URL local con token de un solo proceso. La primera página marca
+esa pestaña en ``app.storage.tab`` como principal, de modo que al navegar a otras
+páginas se conserva la identidad aunque el token ya no esté en la URL.
+
+Si el cliente principal desaparece, se espera una ventana corta antes de apagar:
+esto evita cerrar el servidor durante navegación, recarga o reconexión normal.
 """
 
-import os
+import asyncio
 import secrets
 import webbrowser
 
@@ -16,9 +18,11 @@ from nicegui import Client, app
 from config import UI_PORT
 
 MAIN_WINDOW_TOKEN = secrets.token_urlsafe(24)
-SHUTDOWN_ON_MAIN_WINDOW_CLOSE = os.getenv('ECOSENSOR_SHUTDOWN_ON_MAIN_CLOSE', '').strip().lower() in {'1', 'true', 'yes', 'si', 'sí'}
+MAIN_WINDOW_TAB_KEY = 'ecosensor_es_pestana_principal'
+MAIN_WINDOW_SHUTDOWN_DELAY_SECONDS = 2.5
 _LOCAL_HOSTNAMES = {'127.0.0.1', 'localhost'}
-_main_client_id: str | None = None
+_active_main_client_ids: set[str] = set()
+_shutdown_task: asyncio.Task | None = None
 _shutdown_started = False
 
 
@@ -30,30 +34,64 @@ def is_main_window_request(request: Request) -> bool:
     )
 
 
-def register_main_window(request: Request, client: Client) -> bool:
-    """Registra el cliente principal local.
+def _cancel_pending_shutdown() -> None:
+    global _shutdown_task
 
-    El apagado automático queda desactivado por defecto para que una recarga,
-    cambio de página o fallo de vista no cierre todo el servidor.
-    """
-    global _main_client_id
+    if _shutdown_task and not _shutdown_task.done():
+        _shutdown_task.cancel()
+    _shutdown_task = None
 
-    if not is_main_window_request(request):
+
+def _schedule_shutdown_if_main_does_not_return() -> None:
+    global _shutdown_task
+
+    _cancel_pending_shutdown()
+    _shutdown_task = asyncio.create_task(_shutdown_if_no_main_client())
+
+
+async def _shutdown_if_no_main_client() -> None:
+    global _shutdown_started
+
+    try:
+        await asyncio.sleep(MAIN_WINDOW_SHUTDOWN_DELAY_SECONDS)
+        if not _active_main_client_ids and not _shutdown_started:
+            _shutdown_started = True
+            print('La pestaña principal se cerró. Apagando servidor NiceGUI...', flush=True)
+            app.shutdown()
+    except asyncio.CancelledError:
+        pass
+
+
+def _main_client_deleted(client_id: str) -> None:
+    _active_main_client_ids.discard(client_id)
+    if not _active_main_client_ids:
+        _schedule_shutdown_if_main_does_not_return()
+
+
+async def register_main_window(request: Request, client: Client) -> bool:
+    """Registra la pestaña principal y conserva esa marca entre páginas."""
+    await client.connected()
+
+    if is_main_window_request(request):
+        app.storage.tab[MAIN_WINDOW_TAB_KEY] = True
+
+    if not app.storage.tab.get(MAIN_WINDOW_TAB_KEY, False):
         return False
 
-    _main_client_id = client.id
-    if SHUTDOWN_ON_MAIN_WINDOW_CLOSE:
-        client.on_delete(lambda: shutdown_if_main_window(client))
+    _active_main_client_ids.add(client.id)
+    _cancel_pending_shutdown()
+    client.on_delete(lambda: _main_client_deleted(client.id))
     return True
 
 
 def shutdown_if_main_window(client: Client) -> None:
-    """Apaga NiceGUI si se cerró la pestaña principal y la opción está activada."""
+    """Compatibilidad: fuerza apagado si el cliente principal desaparece."""
     global _shutdown_started
 
-    if client.id != _main_client_id or _shutdown_started:
+    if client.id not in _active_main_client_ids or _shutdown_started:
         return
 
+    _active_main_client_ids.discard(client.id)
     _shutdown_started = True
     print('Se cerró la pestaña principal. Apagando servidor NiceGUI...', flush=True)
     app.shutdown()

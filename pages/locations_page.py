@@ -4,9 +4,11 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from nicegui import app, events, ui
+from fastapi import Request
+from nicegui import Client, app, events, ui
 
 from services.device_registry import active_device_options, ensure_active_devices, registry_revision
+from services.main_window import register_main_window
 from shared.formatters import device_display_name, format_value
 from shared.styles import add_styles
 from storage.measurements_store import graph_rows_all
@@ -287,7 +289,8 @@ def _render_measurements_table(cluster: LocationCluster | None) -> str:
 
 
 @ui.page('/ubicaciones')
-def locations_page() -> None:
+async def locations_page(request: Request, client: Client) -> None:
+    await register_main_window(request, client)
     ui.page_title('EcoSensor Ubicaciones')
     add_styles()
     _add_location_styles()
