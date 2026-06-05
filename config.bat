@@ -3,17 +3,16 @@ setlocal
 
 cd /d "%~dp0"
 
-echo ========================================
-echo Configuracion EcoSensor Servidor Portable
-echo ========================================
-echo.
-
 net session >nul 2>&1
 if not %errorlevel%==0 (
-    echo Solicitando permisos de administrador...
     powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs" >nul 2>&1
     exit /b
 )
+
+echo ========================================
+echo Configuracion EcoSensor Servidor
+echo ========================================
+echo.
 
 echo Ejecutando como administrador.
 echo.
@@ -34,13 +33,8 @@ if not exist ".\run_hidden.vbs" (
     exit /b 1
 )
 
-echo Verificando regla de firewall para TCP 8765...
+echo Configurando Servidor...
 netsh advfirewall firewall add rule name="EcoSensor Servidor TCP 8765" dir=in action=allow protocol=TCP localport=8765 profile=private,domain enable=yes >nul 2>&1
-if %errorlevel%==0 (
-    echo Firewall OK: puerto TCP 8765 permitido en redes privadas/dominio.
-) else (
-    echo ADVERTENCIA: no se pudo crear/verificar la regla de firewall.
-)
 
 echo.
 echo Creando/verificando acceso directo en el escritorio...
@@ -53,7 +47,6 @@ if %errorlevel%==0 (
 
 echo.
 echo Configuracion terminada.
-echo Ahora puedes ejecutar el servidor sin consola desde el acceso directo del escritorio.
-echo Para diagnostico manual, ejecuta run.bat.
+echo Ahora puedes ejecutar el servidor desde el acceso directo del escritorio.
 echo.
 pause
