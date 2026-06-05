@@ -213,7 +213,6 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
     max_count = max(cluster.count for cluster in clusters)
     sizes = [max(14, min(46, 14 + 32 * (cluster.count / max_count))) for cluster in clusters]
     colors = ['#d62728' if cluster.index == selected_index else '#1f77b4' for cluster in clusters]
-    line_widths = [4 if cluster.index == selected_index else 2 for cluster in clusters]
 
     fig = go.Figure(
         go.Scattermap(
@@ -231,7 +230,7 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
                 f'Centro: {cluster.lat:.6f}, {cluster.lon:.6f}'
                 for cluster in clusters
             ],
-            marker=dict(size=sizes, color=colors, opacity=0.82, line=dict(width=line_widths, color='#ffffff')),
+            marker=dict(size=sizes, color=colors, opacity=0.82),
             hovertemplate='%{hovertext}<extra></extra>',
         )
     )
