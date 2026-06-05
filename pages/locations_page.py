@@ -1,10 +1,14 @@
 import asyncio
+import csv
 import html
+import io
 import math
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlencode
 
-from fastapi import Request
+from fastapi import Query, Request
+from fastapi.responses import Response
 from nicegui import Client, app, events, ui
 
 from services.device_registry import active_device_options, ensure_active_devices, registry_revision
@@ -298,6 +302,79 @@ def _render_measurements_table(cluster: LocationCluster | None) -> str:
     )
 
 
+def _safe_coordinate_for_filename(value: float) -> str:
+    return f'{value:.6f}'.replace('.', 'p')
+
+
+def _safe_filename_part(value: str) -> str:
+    safe = ''.join(ch if ch.isalnum() or ch in {'_', '-'} else '_' for ch in value)
+    return safe.strip('_') or 'EcoSensor'
+
+
+def _location_cluster_filename(device_id: str, cluster: LocationCluster) -> str:
+    display_id = _safe_filename_part(device_display_name(device_id))
+    lat = _safe_coordinate_for_filename(cluster.lat)
+    lon = _safe_coordinate_for_filename(cluster.lon)
+    return f'{display_id}_Med_Ubi({lat}_{lon}).csv'
+
+
+def _location_cluster_csv_text(cluster: LocationCluster) -> str:
+    output = io.StringIO()
+    fieldnames = [
+        'Fecha',
+        'Hora',
+        'PM1.0(µg/m³)',
+        'PM2.5(µg/m³)',
+        'PM4.0(µg/m³)',
+        'PM10.0(µg/m³)',
+        'VOC(index)',
+        'NOx(index)',
+        'CO2(ppm)',
+        'Temperatura(°C)',
+        'Humedad(%)',
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in cluster.rows:
+        writer.writerow({
+            'Fecha': _format_date_display(row.get('fecha')),
+            'Hora': str(row.get('hora') or ''),
+            'PM1.0(µg/m³)': format_value(row.get('pm1p0')),
+            'PM2.5(µg/m³)': format_value(row.get('pm2p5')),
+            'PM4.0(µg/m³)': format_value(row.get('pm4p0')),
+            'PM10.0(µg/m³)': format_value(row.get('pm10p0')),
+            'VOC(index)': format_value(row.get('voc')),
+            'NOx(index)': format_value(row.get('nox')),
+            'CO2(ppm)': format_value(row.get('co2'), 0),
+            'Temperatura(°C)': format_value(row.get('temp')),
+            'Humedad(%)': format_value(row.get('hum'), 0),
+        })
+    return output.getvalue()
+
+
+@app.get('/api/locations.csv')
+def download_location_cluster_csv(
+    device_id: str = Query(default=''),
+    cluster_index: int = Query(default=-1),
+) -> Response:
+    selected_device_id = str(device_id or '').strip().lower()
+    if not selected_device_id:
+        return Response('Falta device_id.\n', media_type='text/plain; charset=utf-8', status_code=400)
+
+    rows = graph_rows_all(selected_device_id)
+    clusters = _cluster_rows(_valid_location_rows(rows))
+    if cluster_index < 0 or cluster_index >= len(clusters):
+        return Response('No se encontro el punto seleccionado.\n', media_type='text/plain; charset=utf-8', status_code=404)
+
+    cluster = clusters[cluster_index]
+    filename = _location_cluster_filename(selected_device_id, cluster)
+    return Response(
+        content=_location_cluster_csv_text(cluster),
+        media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
+
+
 @ui.page('/ubicaciones')
 async def locations_page(request: Request, client: Client) -> None:
     await register_main_window(request, client)
@@ -324,6 +401,9 @@ async def locations_page(request: Request, client: Client) -> None:
             chart = ui.plotly({}).classes('locations-map')
             points_label = ui.label('Puntos marcados: 0').classes('locations-summary')
             table = ui.html('').classes('w-full')
+            with ui.row().classes('justify-center mt-4'):
+                export_button = ui.button('Exportar CSV').props('unelevated no-caps').classes('button1')
+                export_button.disable()
 
     async def refresh_sensor_options() -> None:
         nonlocal selected_device_id
@@ -337,6 +417,7 @@ async def locations_page(request: Request, client: Client) -> None:
             selected_device_id = None
             app.storage.user.pop('selected_device_id', None)
             id_label.set_text('ID: -')
+            export_button.disable()
             return
         if selected_device_id not in options:
             selected_device_id = next(iter(options))
@@ -353,6 +434,7 @@ async def locations_page(request: Request, client: Client) -> None:
             chart.update()
             points_label.set_text('Puntos marcados: 0')
             table.set_content(_render_measurements_table(None))
+            export_button.disable()
             return
 
         try:
@@ -361,6 +443,7 @@ async def locations_page(request: Request, client: Client) -> None:
             clusters = _cluster_rows(location_rows)
         except ModuleNotFoundError as exc:
             status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly"}')
+            export_button.disable()
             return
 
         if selected_cluster_index is not None and selected_cluster_index >= len(clusters):
@@ -371,11 +454,13 @@ async def locations_page(request: Request, client: Client) -> None:
             chart.update()
         except ModuleNotFoundError as exc:
             status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly"}')
+            export_button.disable()
             return
         except Exception as exc:
             status.set_text(f'No se pudo dibujar el mapa: {exc}')
             points_label.set_text('Puntos marcados: 0')
             table.set_content(_render_measurements_table(None))
+            export_button.disable()
             return
 
         points_label.set_text(f'Puntos marcados: {len(clusters)}')
@@ -384,6 +469,17 @@ async def locations_page(request: Request, client: Client) -> None:
         else:
             status.set_text(f'{device_display_name(selected_device_id)} no tiene mediciones con GPS válido todavía.')
         table.set_content(_render_measurements_table(clusters[selected_cluster_index] if selected_cluster_index is not None and selected_cluster_index < len(clusters) else None))
+        if selected_cluster_index is not None and selected_cluster_index < len(clusters):
+            export_button.enable()
+        else:
+            export_button.disable()
+
+    def export_selected_cluster() -> None:
+        if not selected_device_id or selected_cluster_index is None or selected_cluster_index < 0 or selected_cluster_index >= len(clusters):
+            ui.notify('Selecciona un punto del mapa antes de exportar CSV.', type='warning')
+            return
+        params = urlencode({'device_id': selected_device_id, 'cluster_index': selected_cluster_index})
+        ui.navigate.to(f'/api/locations.csv?{params}')
 
     async def on_map_click(event: events.GenericEventArguments) -> None:
         nonlocal selected_cluster_index
@@ -396,11 +492,13 @@ async def locations_page(request: Request, client: Client) -> None:
             chart.update()
         except ModuleNotFoundError as exc:
             status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly"}')
+            export_button.disable()
             return
         except Exception as exc:
             status.set_text(f'No se pudo actualizar el mapa: {exc}')
             return
         table.set_content(_render_measurements_table(clusters[selected_cluster_index]))
+        export_button.enable()
 
     async def refresh_if_registry_changed() -> None:
         nonlocal selected_cluster_index
@@ -414,6 +512,7 @@ async def locations_page(request: Request, client: Client) -> None:
             await refresh_sensor_options()
             await refresh_locations()
 
+    export_button.on_click(export_selected_cluster)
     chart.on('plotly_click', on_map_click)
     ui.timer(1.0, refresh_if_registry_changed)
     ui.timer(0.1, lambda: asyncio.create_task(refresh_sensor_options()), once=True)
