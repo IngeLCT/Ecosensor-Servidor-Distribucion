@@ -16,12 +16,12 @@ from config import STATIC_DIR, UI_HOST, UI_PORT  # debe cargarse antes de import
 from fastapi import Query, Request
 from fastapi.responses import JSONResponse, Response
 from nicegui import app, ui
-from services.device_registry import active_devices, mark_device_seen, probe_failures, remember_host
+from services.device_registry import ensure_active_devices, mark_device_seen, probe_failures, remember_host
 from services.measurement_sync import background_sync_loop, is_history_syncing, schedule_preventive_history_sync, sync_before_csv_download
 from services.main_window import open_main_browser
 from services.mdns_service import start_mdns_service
 from shared.formatters import row_from_payload
-from storage.measurements_store import graph_latest_row, graph_rows_history, graph_rows_since, measurements_csv_text, save_measurement
+from storage.measurements_store import graph_latest_row, graph_rows_history, graph_rows_since, measurements_csv_text, save_measurement, validate_measurements_for_csv
 
 
 def _register_pages() -> None:
@@ -50,8 +50,9 @@ app.on_startup(open_main_browser)
 
 
 @app.get('/api/devices')
-def devices_status() -> JSONResponse:
-    return JSONResponse({'ok': True, 'active': active_devices(), 'failures': probe_failures()})
+async def devices_status() -> JSONResponse:
+    active = await ensure_active_devices()
+    return JSONResponse({'ok': True, 'active': active, 'failures': probe_failures()})
 
 
 @app.post('/api/measurements/push')
@@ -128,7 +129,7 @@ async def api_sync_before_download(device_id: str | None = Query(default=None)) 
 
 
 @app.get('/api/measurements.csv')
-def download_measurements_csv(device_id: str | None = Query(default=None)) -> Response:
+async def download_measurements_csv(device_id: str | None = Query(default=None)) -> Response:
     filename_id = (device_id or 'ecosensor01').strip() or 'ecosensor01'
     if is_history_syncing(filename_id):
         return Response(
@@ -139,8 +140,26 @@ def download_measurements_csv(device_id: str | None = Query(default=None)) -> Re
             media_type='text/plain; charset=utf-8',
             status_code=409,
         )
+
+    # Defensa principal: incluso si el botón o el navegador llaman directo al CSV,
+    # primero sincronizar, reparar fechas/hora y validar. Nunca entregar CSV malo.
+    sync_result = await sync_before_csv_download(filename_id)
+    if not sync_result.get('ok'):
+        return Response(
+            content=sync_result.get('message', 'No se puede descargar el CSV porque hay datos inválidos.') + '\n',
+            media_type='text/plain; charset=utf-8',
+            status_code=409,
+        )
+
+    validation = validate_measurements_for_csv(filename_id)
+    if not validation.get('ok'):
+        return Response(
+            content=validation.get('message', 'No se puede descargar el CSV porque hay datos inválidos.') + '\n',
+            media_type='text/plain; charset=utf-8',
+            status_code=409,
+        )
     return Response(
-        content=measurements_csv_text(device_id),
+        content=measurements_csv_text(filename_id),
         media_type='text/csv; charset=utf-8',
         headers={'Content-Disposition': f'attachment; filename="{filename_id}_mediciones.csv"'},
     )

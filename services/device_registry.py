@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from time import perf_counter
 from typing import Any
 
-from config import DEFAULT_ESP_HOST, DEVICE_ID
+from config import DEFAULT_ESP_HOST, DEVICE_ID, SHOW_PROBE_FAILURES
 from services.esp_client import build_endpoints, fetch_json_sync, normalize_host_input
 from shared.formatters import device_display_name
 from storage.settings_store import load_settings, save_settings
@@ -457,6 +457,15 @@ def active_device_options() -> dict[str, str]:
 
 
 def probe_failures() -> list[dict[str, Any]]:
+    """Errores visibles para la UI.
+
+    El discovery prueba muchos hosts posibles (ecosensor01.local, ecosensor02.local,
+    barrido LAN, etc.). Si esos equipos no están en la red, no debe ensuciar el
+    dashboard. Los fallos quedan guardados internamente y solo se exponen al
+    activar ECOSENSOR_SHOW_PROBE_FAILURES=1.
+    """
+    if not SHOW_PROBE_FAILURES:
+        return []
     return sorted(_probe_failures.values(), key=lambda item: item.get('host') or '')
 
 

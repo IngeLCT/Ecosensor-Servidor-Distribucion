@@ -700,6 +700,58 @@ def repair_historical_invalid_timestamps(
             )
             repaired += int(cursor.rowcount or 0)
         conn.commit()
+
+        # Tercera pasada: reconstrucción hacia adelante desde la última medición
+        # confiable. Cubre bloques donde la siguiente ancla también quedó
+        # reconstruida con una fecha imposible o anterior a la secuencia.
+        rows = conn.execute(
+            '''
+            SELECT id, source_id, device_timestamp, time_valid, time_source, window_s
+            FROM measurements
+            WHERE source_id IS NOT NULL
+            ORDER BY source_id ASC, id ASC
+            '''
+        ).fetchall()
+
+        previous_valid_dt: datetime | None = None
+        forward_updates: list[tuple[str, str, int]] = []
+        for row in rows:
+            parsed = _parse_timestamp_local(row['device_timestamp'])
+            source = str(row['time_source'] or '').lower()
+            invalid = (
+                parsed is None
+                or row['time_valid'] == 0
+                or source == 'pending_estimate'
+                or (previous_valid_dt is not None and parsed <= previous_valid_dt)
+            )
+            if invalid:
+                if previous_valid_dt is None:
+                    continue
+                try:
+                    step = max(1, int(row['window_s'] or 300))
+                except (TypeError, ValueError):
+                    step = 300
+                parsed = previous_valid_dt + timedelta(seconds=step)
+                forward_updates.append((parsed.isoformat(timespec='seconds'), HISTORICAL_BACKFILLED_SOURCE, row['id']))
+            if parsed is not None:
+                previous_valid_dt = parsed
+
+        for timestamp, source, row_id in forward_updates:
+            cursor = conn.execute(
+                '''
+                UPDATE measurements
+                SET device_timestamp = ?, time_valid = 1, time_source = ?
+                WHERE id = ?
+                  AND (
+                    COALESCE(device_timestamp, '') != ?
+                    OR COALESCE(time_valid, -1) != 1
+                    OR COALESCE(time_source, '') != ?
+                  )
+                ''',
+                (timestamp, source, row_id, timestamp, source),
+            )
+            repaired += int(cursor.rowcount or 0)
+        conn.commit()
     return repaired
 
 
@@ -751,6 +803,14 @@ def repair_future_estimated_timestamps(device_id: str | None = None) -> int:
     return repaired
 
 
+def _csv_date_display(value: str | None) -> str:
+    parsed = _parse_timestamp_local(str(value or ''))
+    if parsed is None:
+        text = str(value or '').strip()
+        return text
+    return parsed.strftime('%d-%m-%Y')
+
+
 def measurements_csv_text(device_id: str | None = None) -> str:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)
@@ -782,7 +842,7 @@ def measurements_csv_text(device_id: str | None = None) -> str:
             writer.writerow({
                 'id': row['source_id'] if row['source_id'] is not None else row['id'],
                 'device_id': row['device_id'],
-                'Fecha de medicion': date_part,
+                'Fecha de medicion': _csv_date_display(row['device_timestamp']),
                 'Hora de medicion': time_part,
                 'PM1.0': _csv_decimal(row['pm1p0']),
                 'PM2.5': _csv_decimal(row['pm2p5']),
@@ -799,6 +859,115 @@ def measurements_csv_text(device_id: str | None = None) -> str:
 
     return output.getvalue()
 
+
+def _source_id_blocks(source_ids: list[int]) -> list[dict[str, int]]:
+    """Agrupa source_id consecutivos para mensajes claros de validación."""
+    if not source_ids:
+        return []
+    blocks: list[dict[str, int]] = []
+    start = previous = source_ids[0]
+    for source_id in source_ids[1:]:
+        if source_id == previous + 1:
+            previous = source_id
+            continue
+        blocks.append({'from': start, 'to': previous, 'count': previous - start + 1})
+        start = previous = source_id
+    blocks.append({'from': start, 'to': previous, 'count': previous - start + 1})
+    return blocks
+
+
+def validate_measurements_for_csv(device_id: str | None = None) -> dict[str, Any]:
+    """Valida que el CSV general no vaya a salir con fecha/hora inválida.
+
+    La descarga general es un producto para usuario final; no debe generarse si
+    hay historial con timestamp vacío, no parseable, `time_valid=0` o marcado
+    como `pending_estimate`. En esos casos se devuelve un resumen para mostrar
+    un bloqueo explícito en la UI/API.
+    """
+    safe_id = _safe_device_id(device_id)
+    ensure_db(safe_id)
+    repair_future_estimated_timestamps(safe_id)
+    repair_historical_invalid_timestamps(safe_id)
+
+    invalid_ids: list[int] = []
+    invalid_samples: list[dict[str, Any]] = []
+    previous: tuple[int, datetime] | None = None
+    backwards: list[dict[str, Any]] = []
+
+    with sqlite3.connect(db_file_for_device(safe_id)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            '''
+            SELECT id, source_id, device_timestamp, time_valid, time_source
+            FROM measurements
+            WHERE device_id = ?
+            ORDER BY COALESCE(source_id, id) ASC, id ASC
+            ''',
+            (safe_id,),
+        ).fetchall()
+
+    for row in rows:
+        row_id = int(row['source_id'] if row['source_id'] is not None else row['id'])
+        timestamp = str(row['device_timestamp'] or '').strip()
+        parsed = _parse_timestamp_local(timestamp)
+        source = str(row['time_source'] or '').strip().lower()
+        invalid = (
+            not timestamp
+            or parsed is None
+            or row['time_valid'] == 0
+            or source == 'pending_estimate'
+        )
+        if invalid:
+            invalid_ids.append(row_id)
+            if len(invalid_samples) < 10:
+                invalid_samples.append({
+                    'source_id': row_id,
+                    'timestamp': timestamp or None,
+                    'time_valid': row['time_valid'],
+                    'time_source': row['time_source'],
+                })
+            continue
+        if parsed is not None and row['source_id'] is not None:
+            current = (int(row['source_id']), parsed)
+            if previous is not None and current[0] > previous[0] and current[1] < previous[1]:
+                backwards.append({
+                    'source_id': current[0],
+                    'timestamp': current[1].isoformat(timespec='seconds'),
+                    'previous_source_id': previous[0],
+                    'previous_timestamp': previous[1].isoformat(timespec='seconds'),
+                })
+            previous = current
+
+    invalid_blocks = _source_id_blocks(invalid_ids)
+    ok = not invalid_ids and not backwards
+    message = 'Datos listos para descargar CSV.'
+    if invalid_ids:
+        first_blocks = ', '.join(
+            f"{item['from']}–{item['to']}" if item['from'] != item['to'] else str(item['from'])
+            for item in invalid_blocks[:5]
+        )
+        message = (
+            f'No se puede descargar el CSV de {safe_id}. '
+            f'Hay {len(invalid_ids)} mediciones sin fecha/hora válida. '
+            f'Bloques afectados: {first_blocks}.'
+        )
+    elif backwards:
+        message = (
+            f'No se puede descargar el CSV de {safe_id}. '
+            f'Hay {len(backwards)} saltos cronológicos hacia atrás por source_id.'
+        )
+
+    return {
+        'ok': ok,
+        'device_id': safe_id,
+        'total_rows': len(rows),
+        'invalid_count': len(invalid_ids),
+        'invalid_blocks': invalid_blocks,
+        'invalid_samples': invalid_samples,
+        'backwards_count': len(backwards),
+        'backwards_samples': backwards[:10],
+        'message': message,
+    }
 
 
 def _parse_timestamp_local(value: Any) -> datetime | None:

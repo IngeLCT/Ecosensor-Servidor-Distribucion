@@ -22,6 +22,7 @@ from storage.measurements_store import (
     repair_historical_invalid_timestamps,
     save_measurement,
     save_measurements_bulk,
+    validate_measurements_for_csv,
 )
 
 _sync_locks: dict[str, asyncio.Lock] = {}
@@ -883,12 +884,23 @@ async def sync_before_csv_download(device_id: str | None = None) -> dict[str, An
             'message': 'Aún existen datos pendientes por sincronizar; no se generó el CSV.',
         }
 
+    validation = await asyncio.to_thread(validate_measurements_for_csv, target_id)
+    if not validation.get('ok'):
+        return {
+            'ok': False,
+            'device_id': target_id,
+            'pending': 0,
+            'latest_remote_id': latest_remote_id,
+            'error': 'invalid_timestamps',
+            **validation,
+        }
+
     return {
         'ok': True,
         'device_id': target_id,
         'pending': 0,
         'latest_remote_id': latest_remote_id,
-        'message': 'Historial sincronizado. Iniciando descarga CSV.',
+        'message': 'Historial sincronizado y fechas validadas. Iniciando descarga CSV.',
     }
 
 
