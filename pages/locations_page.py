@@ -18,6 +18,20 @@ from shared.styles import add_styles
 from storage.measurements_store import graph_rows_all
 
 CLUSTER_RADIUS_KM = 5.0
+OSM_RASTER_MAP_STYLE = {
+    'version': 8,
+    'sources': {
+        'osm-raster': {
+            'type': 'raster',
+            'tiles': ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            'tileSize': 256,
+            'attribution': '© OpenStreetMap contributors',
+        },
+    },
+    'layers': [
+        {'id': 'osm-raster-layer', 'type': 'raster', 'source': 'osm-raster'},
+    ],
+}
 
 
 @dataclass
@@ -217,13 +231,16 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
     sizes = [max(14, min(46, 14 + 32 * (cluster.count / max_count))) for cluster in clusters]
     colors = ['#d62728' if cluster.index == selected_index else '#1f77b4' for cluster in clusters]
 
+    # Use Scattermap with a minimal raster OpenStreetMap style. Plotly's built-in
+    # vector styles initialize MapLibre with sprite/glyph metadata and can try to
+    # load an unused Maki sprite from unpkg.com ("icons/-15.svg"), which triggers
+    # a harmless but noisy CORS error. This custom raster style keeps the real map
+    # visible while avoiding that external sprite dependency.
     fig = go.Figure(
         go.Scattermap(
             lat=[cluster.lat for cluster in clusters],
             lon=[cluster.lon for cluster in clusters],
-            mode='markers+text',
-            text=[str(cluster.count) for cluster in clusters],
-            textposition='middle center',
+            mode='markers',
             customdata=[cluster.index for cluster in clusters],
             hovertext=[
                 f'Punto {cluster.index + 1}<br>'
@@ -240,7 +257,7 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
     fig.update_layout(
         height=620,
         margin=dict(l=0, r=0, t=0, b=0),
-        map=dict(style='open-street-map', center=dict(lat=center_lat, lon=center_lon), zoom=10),
+        map=dict(style=OSM_RASTER_MAP_STYLE, center=dict(lat=center_lat, lon=center_lon), zoom=10),
         clickmode='event+select',
         showlegend=False,
     )
@@ -257,7 +274,7 @@ def _format_date_display(value: Any) -> str:
         return ''
     parts = text.split('-', 2)
     if len(parts) == 3 and len(parts[0]) == 4:
-        return f'{parts[2]}/{parts[1]}/{parts[0]}'
+        return f'{parts[2]}-{parts[1]}-{parts[0]}'
     return text
 
 
