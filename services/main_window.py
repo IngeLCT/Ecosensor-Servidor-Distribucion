@@ -69,13 +69,32 @@ def _main_client_deleted(client_id: str) -> None:
 
 
 async def register_main_window(request: Request, client: Client) -> bool:
-    """Registra la pestaña principal y conserva esa marca entre páginas."""
-    await client.connected()
+    """Registra la pestaña principal y conserva esa marca entre páginas.
 
-    if is_main_window_request(request):
-        app.storage.tab[MAIN_WINDOW_TAB_KEY] = True
+    Algunos chequeos HTTP simples (por ejemplo ``curl``) pueden renderizar una
+    página NiceGUI sin una conexión de cliente completa. En ese caso
+    ``app.storage.tab`` no existe y no debe generar una excepción en logs.
+    """
+    try:
+        await client.connected(timeout=1.0)
+    except TimeoutError:
+        # Cliente HTTP no interactivo: NiceGUI todavía puede devolver HTML, pero
+        # no hay WebSocket ni storage de pestaña para registrar ventana principal.
+        return False
+    except Exception as exc:
+        print(f'No se pudo registrar la pestaña principal: cliente no conectado ({exc})', flush=True)
+        return False
 
-    if not app.storage.tab.get(MAIN_WINDOW_TAB_KEY, False):
+    try:
+        if is_main_window_request(request):
+            app.storage.tab[MAIN_WINDOW_TAB_KEY] = True
+
+        if not app.storage.tab.get(MAIN_WINDOW_TAB_KEY, False):
+            return False
+    except RuntimeError as exc:
+        if 'app.storage.tab' not in str(exc):
+            raise
+        print('Solicitud HTTP sin pestaña NiceGUI; se omite registro de ventana principal.', flush=True)
         return False
 
     _active_main_client_ids.add(client.id)

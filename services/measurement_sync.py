@@ -9,6 +9,7 @@ from services.device_registry import (
     ensure_active_devices,
     ensure_device_active,
     host_for_device,
+    normalize_device_id,
     recently_seen_devices,
     refresh_active_devices,
 )
@@ -840,12 +841,22 @@ async def sync_sensor_measurements(
 
 async def sync_before_csv_download(device_id: str | None = None) -> dict[str, Any]:
     """Sincroniza histórico bajo demanda antes de permitir descargar CSV."""
-    target_id = (device_id or DEVICE_ID).strip().lower() or DEVICE_ID
+    target_id = normalize_device_id(device_id, default=DEVICE_ID)
+    if not target_id:
+        return {
+            'ok': False,
+            'device_id': str(device_id or '').strip(),
+            'status_code': 400,
+            'error': 'invalid_device_id',
+            'message': 'device_id inválido. Usa ecosensor01 a ecosensor12.',
+        }
+
     active = await ensure_device_active(target_id)
     if not active:
         return {
             'ok': False,
             'device_id': target_id,
+            'status_code': 409,
             'error': 'sensor_not_active',
             'message': 'No se encontró activo el EcoSensor seleccionado; no se descargó el CSV.',
         }

@@ -11,12 +11,12 @@ from services.windows_asyncio import install_connection_reset_filter, install_wi
 
 install_windows_selector_policy()
 
-from config import STATIC_DIR, UI_HOST, UI_PORT  # debe cargarse antes de importar NiceGUI
+from config import DEVICE_ID, STATIC_DIR, UI_HOST, UI_PORT  # debe cargarse antes de importar NiceGUI
 
 from fastapi import Query, Request
 from fastapi.responses import JSONResponse, Response
 from nicegui import app, ui
-from services.device_registry import ensure_active_devices, mark_device_seen, probe_failures, remember_host
+from services.device_registry import ensure_active_devices, mark_device_seen, normalize_device_id, probe_failures, remember_host
 from services.measurement_sync import background_sync_loop, is_history_syncing, schedule_preventive_history_sync, sync_before_csv_download
 from services.main_window import open_main_browser
 from services.mdns_service import start_mdns_service
@@ -70,8 +70,8 @@ async def api_measurements_push(request: Request) -> JSONResponse:
     if not row:
         return JSONResponse({'ok': False, 'error': 'empty_payload'}, status_code=400)
 
-    device_id = str(row.get('id') or row.get('device_id') or '').strip().lower()
-    if not device_id.startswith('ecosensor'):
+    device_id = normalize_device_id(row.get('id') or row.get('device_id'))
+    if not device_id:
         return JSONResponse({'ok': False, 'error': 'invalid_device_id'}, status_code=400)
 
     row['id'] = device_id
@@ -125,12 +125,19 @@ async def api_measurements_push(request: Request) -> JSONResponse:
 @app.post('/api/measurements/sync-before-download')
 async def api_sync_before_download(device_id: str | None = Query(default=None)) -> JSONResponse:
     result = await sync_before_csv_download(device_id)
-    return JSONResponse(result, status_code=200 if result.get('ok') else 409)
+    status_code = 200 if result.get('ok') else int(result.get('status_code') or 409)
+    return JSONResponse(result, status_code=status_code)
 
 
 @app.get('/api/measurements.csv')
 async def download_measurements_csv(device_id: str | None = Query(default=None)) -> Response:
-    filename_id = (device_id or 'ecosensor01').strip() or 'ecosensor01'
+    filename_id = normalize_device_id(device_id, default=DEVICE_ID)
+    if not filename_id:
+        return Response(
+            content='device_id inválido. Usa ecosensor01 a ecosensor12.\n',
+            media_type='text/plain; charset=utf-8',
+            status_code=400,
+        )
     if is_history_syncing(filename_id):
         return Response(
             content=(
@@ -148,7 +155,7 @@ async def download_measurements_csv(device_id: str | None = Query(default=None))
         return Response(
             content=sync_result.get('message', 'No se puede descargar el CSV porque hay datos inválidos.') + '\n',
             media_type='text/plain; charset=utf-8',
-            status_code=409,
+            status_code=int(sync_result.get('status_code') or 409),
         )
 
     validation = validate_measurements_for_csv(filename_id)

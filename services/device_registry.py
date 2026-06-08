@@ -131,6 +131,23 @@ def _is_real_ecosensor_id(device_id: str | None) -> bool:
     return bool(_REAL_DEVICE_RE.match(str(device_id or '').strip().lower()))
 
 
+def normalize_device_id(value: str | None, *, default: str | None = None) -> str | None:
+    """Devuelve un ID EcoSensor permitido o ``None`` si el valor no es válido.
+
+    Solo se aceptan IDs reales del rango conocido ``ecosensor01``–``ecosensor12``.
+    Esto evita que parámetros externos terminen convertidos en nombres de host
+    como ``../../etc/passwd.local`` antes de sincronizar o probar red.
+    """
+    candidate = str(value or '').strip().lower()
+    if not candidate and default is not None:
+        candidate = str(default or '').strip().lower()
+    return candidate if _is_real_ecosensor_id(candidate) else None
+
+
+def is_valid_device_id(value: str | None) -> bool:
+    return normalize_device_id(value) is not None
+
+
 def _status_device_id(status_data: dict[str, Any] | None) -> str | None:
     if not isinstance(status_data, dict):
         return None
@@ -177,7 +194,7 @@ def _settings_device_hosts(settings: dict[str, Any]) -> dict[str, str]:
 
 
 def host_for_device(device_id: str) -> str:
-    device_id = (device_id or DEVICE_ID).strip().lower()
+    device_id = normalize_device_id(device_id, default=DEVICE_ID) or DEVICE_ID
     settings = load_settings()
     device_hosts = _settings_device_hosts(settings)
     if device_hosts.get(device_id):
@@ -564,7 +581,10 @@ async def ensure_active_devices() -> list[dict[str, Any]]:
 
 
 async def ensure_device_active(device_id: str | None) -> dict[str, Any] | None:
-    target = (device_id or '').strip().lower()
+    raw_target = str(device_id or '').strip()
+    target = normalize_device_id(raw_target)
+    if raw_target and not target:
+        return None
     if target:
         for item in active_devices():
             if item['device_id'] == target:
