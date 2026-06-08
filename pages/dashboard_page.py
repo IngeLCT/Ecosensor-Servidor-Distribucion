@@ -37,7 +37,6 @@ async def dashboard(request: Request, client: Client) -> None:
             ui.link('Ubicaciones', '/ubicaciones')
             ui.label('|')
             ui.link('Gráficas del Historial', '/graficas/historial')
-            ui.label('|')
 
         with ui.element('div').classes('brand-header'):
             ui.image('/static/LCT.png').props('fit=contain no-spinner').classes('connect-logo')

@@ -92,7 +92,6 @@ def _nav() -> None:
         ui.link('Ubicaciones', '/ubicaciones')
         ui.label('|')
         ui.link('Gráficas del Historial', '/graficas/historial')
-        ui.label('|')
 
 
 def _add_graph_styles() -> None:
