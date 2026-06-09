@@ -25,3 +25,19 @@ output/
 *.iss.tmp
 *.bak
 *.log
+
+# IDE / PyCharm
+.idea/
+*.iml
+
+# NiceGUI
+.nicegui/
+
+# Inno Setup
+Installer/output/
+installer/output/
+output/
+Installer/*.iss
+*.iss.tmp
+*.bak
+*.log
