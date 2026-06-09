@@ -218,9 +218,7 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
         go.Scattermap(
             lat=[cluster.lat for cluster in clusters],
             lon=[cluster.lon for cluster in clusters],
-            mode='markers+text',
-            text=[str(cluster.count) for cluster in clusters],
-            textposition='middle center',
+            mode='markers',
             customdata=[cluster.index for cluster in clusters],
             hovertext=[
                 f'Punto {cluster.index + 1}<br>'
@@ -230,7 +228,13 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
                 f'Centro: {cluster.lat:.6f}, {cluster.lon:.6f}'
                 for cluster in clusters
             ],
-            marker=dict(size=sizes, color=colors, opacity=0.82),
+            marker=dict(
+                size=sizes,
+                color=colors,
+                opacity=0.82,
+                symbol='circle',
+                allowoverlap=True,
+            ),
             hovertemplate='%{hovertext}<extra></extra>',
         )
     )
