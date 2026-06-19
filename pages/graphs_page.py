@@ -44,6 +44,7 @@ HISTORY_MENU = [
 ]
 HISTORY_LOAD_CHUNK_SIZE = 1000
 HISTORY_TABLE_PAGE_SIZE = 300
+HISTORY_BAR_RENDER_LIMIT = 800
 
 
 @dataclass(frozen=True)
@@ -819,8 +820,10 @@ def _build_history_figure(labels: list[str], values: list[float], times: list[An
 
     display_labels = list(labels)
     display_values: list[float | None] = list(values)
+    use_dense_line = len(display_labels) > HISTORY_BAR_RENDER_LIMIT
+
     # Si hay pocos datos, mantener 24 posiciones para evitar barras enormes.
-    if len(display_labels) < MAX_BARS:
+    if not use_dense_line and len(display_labels) < MAX_BARS:
         missing = MAX_BARS - len(display_labels)
         display_labels.extend([''] * missing)
         display_values.extend([None] * missing)
@@ -830,11 +833,25 @@ def _build_history_figure(labels: list[str], values: list[float], times: list[An
     x_values = list(range(len(display_labels)))
     tickvals, ticktext = _history_category_ticks(display_labels, minutes)
 
-    fig = go.Figure(data=[go.Bar(x=x_values, y=display_values, name=spec.title, marker={'color': spec.color})])
+    if use_dense_line:
+        trace = go.Scattergl(
+            x=x_values,
+            y=display_values,
+            name=spec.title,
+            mode='lines+markers',
+            line={'color': spec.color, 'width': 2},
+            marker={'color': spec.color, 'size': 3},
+            hovertemplate='%{text}<br>%{y}<extra></extra>',
+            text=display_labels,
+        )
+    else:
+        trace = go.Bar(x=x_values, y=display_values, name=spec.title, marker={'color': spec.color})
+
+    fig = go.Figure(data=[trace])
     fig.update_layout(
         height=600,
         margin={'t': 20, 'l': 60, 'r': 40, 'b': 95 if minutes == 1440 else 150},
-        bargap=0.2,
+        bargap=0 if use_dense_line else 0.2,
         paper_bgcolor='#cce5dc',
         plot_bgcolor='#cce5dc',
         showlegend=False,
