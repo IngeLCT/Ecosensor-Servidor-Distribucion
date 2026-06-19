@@ -828,8 +828,6 @@ def _build_history_figure(labels: list[str], values: list[float], times: list[An
         display_labels.extend([''] * missing)
         display_values.extend([None] * missing)
 
-    finite = [v for v in display_values if isinstance(v, (int, float)) and math.isfinite(v) and v >= 0]
-    upper = max(finite) * 2 if finite and max(finite) > 0 else 1
     x_values = list(range(len(display_labels)))
     tickvals, ticktext = _history_category_ticks(display_labels, minutes)
 
@@ -878,8 +876,8 @@ def _build_history_figure(labels: list[str], values: list[float], times: list[An
     fig.update_yaxes(
         title={'text': f'<b>{spec.y_title}</b>', 'font': {'size': 16, 'color': 'black', 'family': 'Arial'}},
         tickfont={'color': 'black', 'size': 14, 'family': 'Arial'},
+        autorange=True,
         rangemode='tozero',
-        range=[0, upper],
         fixedrange=False,
         showgrid=False,
         zeroline=False,
