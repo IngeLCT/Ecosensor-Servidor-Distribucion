@@ -12,7 +12,7 @@ from fastapi.responses import Response
 from nicegui import Client, app, events, ui
 
 from services.device_registry import active_device_options, ensure_active_devices, registry_revision
-from services.main_window import register_main_window
+from services.main_window import HEAVY_PAGE_SHUTDOWN_DELAY_SECONDS, register_main_window
 from shared.formatters import device_display_name, format_value
 from shared.styles import add_styles
 from storage.measurements_store import graph_rows_all
@@ -378,7 +378,7 @@ def download_location_cluster_csv(
 
 @ui.page('/ubicaciones')
 async def locations_page(request: Request, client: Client) -> None:
-    await register_main_window(request, client)
+    await register_main_window(request, client, shutdown_delay_seconds=HEAVY_PAGE_SHUTDOWN_DELAY_SECONDS)
     ui.page_title('EcoSensor Ubicaciones')
     add_styles()
     _add_location_styles()

@@ -8,7 +8,7 @@ from fastapi import Request
 from nicegui import Client, app, ui
 
 from services.device_registry import active_device_options, ensure_active_devices
-from services.main_window import register_main_window
+from services.main_window import HEAVY_PAGE_SHUTDOWN_DELAY_SECONDS, register_main_window
 from shared.formatters import device_display_name
 from shared.styles import add_styles
 from storage.measurements_store import graph_latest_row, graph_rows_all, graph_rows_history
@@ -891,7 +891,7 @@ def _history_table_html(labels: list[str], values: list[float], spec: ChartSpec,
 
 @ui.page('/graficas/historial')
 async def history_graph(request: Request, client: Client) -> None:
-    await register_main_window(request, client)
+    await register_main_window(request, client, shutdown_delay_seconds=HEAVY_PAGE_SHUTDOWN_DELAY_SECONDS)
     ui.page_title('Gráficas del Historial')
     add_styles()
     _add_graph_styles()
