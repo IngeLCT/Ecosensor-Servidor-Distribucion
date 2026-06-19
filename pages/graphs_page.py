@@ -391,14 +391,26 @@ def _rows_to_frame(rows: list[dict[str, Any]]) -> Any:
     return frame.sort_values('_dt')
 
 
+def _format_date_display(date_part: str) -> str:
+    value = str(date_part or '').strip()
+    if not value:
+        return ''
+    parts = value.replace('/', '-').replace('.', '-').split('-')
+    if len(parts) == 3 and len(parts[0]) == 4:
+        return f'{parts[2].zfill(2)}-{parts[1].zfill(2)}-{parts[0]}'
+    if len(parts) == 3:
+        return f'{parts[0].zfill(2)}-{parts[1].zfill(2)}-{parts[2]}'
+    return value
+
+
 def _fmt_label(ts: Any) -> str:
-    return ts.strftime('%Y-%m-%d %H:%M')
+    return ts.strftime('%d-%m-%Y %H:%M')
 
 
 def _short_date_label(date_part: str) -> str:
-    parts = date_part.split('-')
+    parts = _format_date_display(date_part).split('-')
     if len(parts) == 3:
-        return f'{parts[2]}/{parts[1]}/{parts[0][-2:]}'
+        return f'{parts[0]}/{parts[1]}/{parts[2][-2:]}'
     return date_part
 
 
@@ -861,12 +873,9 @@ def _build_history_figure(labels: list[str], values: list[float], times: list[An
 
 def _table_datetime_label(label: str) -> str:
     if ' ' not in label:
-        return label or '-'
+        return _format_date_display(label) or '-'
     date_part, time_part = label.split(' ', 1)
-    parts = date_part.split('-')
-    if len(parts) == 3:
-        date_part = f'{parts[2]}-{parts[1]}-{parts[0]}'
-    return f'{date_part} {time_part}'
+    return f'{_format_date_display(date_part)} {time_part}'
 
 
 def _history_table_html(labels: list[str], values: list[float], spec: ChartSpec, minutes: int) -> str:
@@ -1111,7 +1120,10 @@ async def history_graph(request: Request, client: Client) -> None:
             else:
                 total = len(frame_cache)
                 last = frame_cache.iloc[-1]
-                status.set_text(f'Historial cargado. Registros: {total}. Última medición: {last["fecha"]} {last["hora"]}')
+                status.set_text(
+                    f'Historial cargado. Registros: {total}. '
+                    f'Última medición: {_format_date_display(last["fecha"])} {last["hora"]}'
+                )
             await rebuild()
         except ModuleNotFoundError as exc:
             status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly/pandas"}')
