@@ -21,7 +21,7 @@ from services.measurement_sync import background_sync_loop, is_history_syncing, 
 from services.main_window import open_main_browser
 from services.mdns_service import start_mdns_service
 from shared.formatters import row_from_payload
-from storage.measurements_store import graph_latest_row, graph_rows_history, graph_rows_since, measurements_csv_text, save_measurement, validate_measurements_for_csv
+from storage.measurements_store import graph_latest_row, graph_rows_count, graph_rows_history, graph_rows_page, graph_rows_since, measurements_csv_text, save_measurement, validate_measurements_for_csv
 
 
 def _register_pages() -> None:
@@ -177,15 +177,20 @@ def graph_read(
     op: str = Query(default='history'),
     id: int = Query(default=0),
     limit: int = Query(default=5000),
+    offset: int = Query(default=0),
     device_id: str | None = Query(default=None),
 ) -> JSONResponse:
     if op == 'latest':
         return JSONResponse({'ok': True, 'row': graph_latest_row(device_id)})
     if op == 'history':
         return JSONResponse({'ok': True, 'rows': graph_rows_history(limit, device_id)})
+    if op == 'history_count':
+        return JSONResponse({'ok': True, 'total': graph_rows_count(device_id)})
+    if op == 'history_page':
+        return JSONResponse({'ok': True, 'offset': offset, 'limit': limit, 'rows': graph_rows_page(offset, limit, device_id)})
     if op == 'since':
         return JSONResponse({'ok': True, 'rows': graph_rows_since(id, limit, device_id)})
-    return JSONResponse({'ok': False, 'error': 'unknown_op', 'allowed': 'latest|history|since'}, status_code=400)
+    return JSONResponse({'ok': False, 'error': 'unknown_op', 'allowed': 'latest|history|history_count|history_page|since'}, status_code=400)
 
 
 start_mdns_service()

@@ -427,6 +427,35 @@ def graph_rows_all(device_id: str | None = None) -> list[dict[str, Any]]:
     return [_graph_row(row) for row in rows]
 
 
+def graph_rows_count(device_id: str | None = None) -> int:
+    ensure_db(device_id)
+    repair_future_estimated_timestamps(device_id)
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        value = conn.execute('SELECT COUNT(*) FROM measurements').fetchone()[0]
+    return int(value or 0)
+
+
+def graph_rows_page(offset: int = 0, limit: int = 1000, device_id: str | None = None) -> list[dict[str, Any]]:
+    ensure_db(device_id)
+    repair_future_estimated_timestamps(device_id)
+    offset = max(0, int(offset))
+    limit = max(1, min(5000, int(limit)))
+    with sqlite3.connect(db_file_for_device(device_id)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            '''
+            SELECT id, source_id, device_id, device_timestamp,
+                   pm1p0, pm2p5, pm4p0, pm10p0,
+                   voc, nox, co2, temp, hum, gps_valid, gps_lat, gps_lon, gps_satellites, gps_hdop
+            FROM measurements
+            ORDER BY COALESCE(source_id, id) ASC, id ASC
+            LIMIT ? OFFSET ?
+            ''',
+            (limit, offset),
+        ).fetchall()
+    return [_graph_row(row) for row in rows]
+
+
 def graph_rows_since(row_id: int, limit: int = 500, device_id: str | None = None) -> list[dict[str, Any]]:
     ensure_db(device_id)
     repair_future_estimated_timestamps(device_id)

@@ -11,7 +11,7 @@ from services.device_registry import active_device_options, ensure_active_device
 from services.main_window import HEAVY_PAGE_SHUTDOWN_DELAY_SECONDS, register_main_window
 from shared.formatters import device_display_name
 from shared.styles import add_styles
-from storage.measurements_store import graph_latest_row, graph_rows_all, graph_rows_history
+from storage.measurements_store import graph_latest_row, graph_rows_count, graph_rows_history, graph_rows_page
 
 
 MAX_BARS = 24
@@ -42,6 +42,8 @@ HISTORY_MENU = [
     ('12 hr', 720),
     ('24 hr', 1440),
 ]
+HISTORY_LOAD_CHUNK_SIZE = 1000
+HISTORY_TABLE_PAGE_SIZE = 300
 
 
 @dataclass(frozen=True)
@@ -904,6 +906,7 @@ async def history_graph(request: Request, client: Client) -> None:
     current_minutes = SAMPLE_BASE_MIN
     visible_start_index = 0
     visible_end_index = 0
+    table_page_index = 0
 
     with ui.element('div').classes('dashboard'):
         _nav()
@@ -950,6 +953,10 @@ async def history_graph(request: Request, client: Client) -> None:
 
         with ui.element('div').classes('chart-card history-chart-card'):
             chart = ui.plotly({}).classes('w-full').style('height: 620px; max-height: 620px;')
+        table_status = ui.label('').classes('status-line mt-3')
+        with ui.row().classes('justify-center gap-3 mt-2'):
+            prev_table_button = ui.button('Anterior').props('unelevated no-caps').classes('button1')
+            next_table_button = ui.button('Siguiente').props('unelevated no-caps').classes('button1')
         table = ui.html('').classes('w-full')
 
     def _visible_history_slice() -> tuple[list[str], list[float], list[Any]]:
@@ -1006,23 +1013,47 @@ async def history_graph(request: Request, client: Client) -> None:
             else:
                 button.classes(remove='active')
 
+    def render_table_page(visible_labels: list[str], visible_values: list[float], spec: ChartSpec) -> None:
+        total_rows = len(visible_labels)
+        if total_rows <= 0:
+            table_status.set_text('Tabla sin datos para mostrar.')
+            table.set_content('')
+            prev_table_button.disable()
+            next_table_button.disable()
+            return
+
+        max_page = max(0, math.ceil(total_rows / HISTORY_TABLE_PAGE_SIZE) - 1)
+        page = max(0, min(table_page_index, max_page))
+        start = page * HISTORY_TABLE_PAGE_SIZE
+        end = min(start + HISTORY_TABLE_PAGE_SIZE, total_rows)
+        table_status.set_text(
+            f'Tabla: mostrando {start + 1}-{end} de {total_rows} registros del rango seleccionado.'
+        )
+        table.set_content(_history_table_html(visible_labels[start:end], visible_values[start:end], spec, current_minutes))
+        prev_table_button.enable() if page > 0 else prev_table_button.disable()
+        next_table_button.enable() if page < max_page else next_table_button.disable()
+
     async def redraw() -> None:
         if not current_labels:
             chart.figure = _build_history_figure([], [], [], HISTORY_OPTIONS[str(selector.value)], current_minutes)
             chart.update()
+            table_status.set_text('Tabla sin datos para mostrar.')
             table.set_content('')
+            prev_table_button.disable()
+            next_table_button.disable()
             return
 
         spec = HISTORY_OPTIONS[str(selector.value)]
         visible_labels, visible_values, visible_times = _visible_history_slice()
         chart.figure = _build_history_figure(visible_labels, visible_values, visible_times, spec, current_minutes)
         chart.update()
-        table.set_content(_history_table_html(visible_labels, visible_values, spec, current_minutes))
+        render_table_page(visible_labels, visible_values, spec)
 
     async def rebuild() -> None:
-        nonlocal current_labels, current_values, current_times
+        nonlocal current_labels, current_values, current_times, table_page_index
         if frame_cache is None:
             return
+        table_page_index = 0
         spec = HISTORY_OPTIONS[str(selector.value)]
         current_labels, current_values, current_times = _history_series_data(frame_cache, spec, current_minutes)
         update_interval_buttons()
@@ -1053,11 +1084,30 @@ async def history_graph(request: Request, client: Client) -> None:
                 status.set_text('No hay EcoSensor activos disponibles.')
                 await rebuild()
                 return
-            status.set_text('Cargando historial almacenado...')
-            rows = await asyncio.to_thread(graph_rows_all, selected_device_id)
-            frame_cache = _rows_to_frame(rows)
-            if frame_cache.empty:
+
+            total_rows = await asyncio.to_thread(graph_rows_count, selected_device_id)
+            if total_rows <= 0:
+                frame_cache = _rows_to_frame([])
                 status.set_text('Historial local vacío. No hay registros almacenados para graficar.')
+                await rebuild()
+                return
+
+            status.set_text(f'Cargando historial por bloques... 0 de {total_rows} registros.')
+            loaded_rows: list[dict[str, Any]] = []
+            offset = 0
+            while offset < total_rows:
+                chunk = await asyncio.to_thread(graph_rows_page, offset, HISTORY_LOAD_CHUNK_SIZE, selected_device_id)
+                if not chunk:
+                    break
+                loaded_rows.extend(chunk)
+                offset += len(chunk)
+                status.set_text(f'Cargando historial por bloques... {min(offset, total_rows)} de {total_rows} registros.')
+                await asyncio.sleep(0)
+
+            status.set_text(f'Procesando {len(loaded_rows)} registros para graficar...')
+            frame_cache = await asyncio.to_thread(_rows_to_frame, loaded_rows)
+            if frame_cache.empty:
+                status.set_text('Historial local vacío. No hay registros válidos para graficar.')
             else:
                 total = len(frame_cache)
                 last = frame_cache.iloc[-1]
@@ -1069,7 +1119,7 @@ async def history_graph(request: Request, client: Client) -> None:
             status.set_text(f'Error al cargar historial: {exc}')
 
     async def on_history_range_change(event: Any) -> None:
-        nonlocal visible_start_index, visible_end_index
+        nonlocal visible_start_index, visible_end_index, table_page_index
 
         if not current_labels:
             return
@@ -1083,10 +1133,18 @@ async def history_graph(request: Request, client: Client) -> None:
 
         visible_start_index = max(0, min(raw_min, len(current_labels) - 1))
         visible_end_index = max(visible_start_index, min(raw_max, len(current_labels) - 1))
+        table_page_index = 0
 
         _update_history_range_labels()
         await redraw()
 
+    async def change_table_page(delta: int) -> None:
+        nonlocal table_page_index
+        table_page_index = max(0, table_page_index + delta)
+        await redraw()
+
+    prev_table_button.on_click(lambda: change_table_page(-1))
+    next_table_button.on_click(lambda: change_table_page(1))
     history_range.on('update:model-value', on_history_range_change)
     selector.on('update:model-value', lambda: ui.timer(0.1, rebuild, once=True))
     ui.timer(0.1, load_history, once=True)
