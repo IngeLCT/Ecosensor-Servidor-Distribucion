@@ -200,6 +200,6 @@ ui.run(
     title='EcoSensor Servidor',
     reload=False,
     show=False,
-    reconnect_timeout=2.0,
+    reconnect_timeout=30.0,
     storage_secret='ecosensor-servidor-local',
 )
