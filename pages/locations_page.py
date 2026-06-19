@@ -17,7 +17,7 @@ from shared.formatters import device_display_name, format_value
 from shared.styles import add_styles
 from storage.measurements_store import graph_rows_all
 
-CLUSTER_RADIUS_KM = 5.0
+CLUSTER_RADIUS_KM = 1.0
 @dataclass
 class LocationCluster:
     index: int
