@@ -34,6 +34,9 @@ _register_pages()
 
 app.add_static_files('/static', STATIC_DIR)
 
+@app.get('/api/health')
+async def api_health() -> JSONResponse:
+    return JSONResponse({'ok': True, 'service': 'EcoSensor Servidor'})
 
 _background_sync_task: asyncio.Task | None = None
 
@@ -45,9 +48,69 @@ def _start_background_sync() -> None:
         _background_sync_task = asyncio.create_task(background_sync_loop())
 
 
-app.on_startup(_start_background_sync)
-app.on_startup(open_main_browser)
+async def _wait_until_http_ready(timeout_seconds: float = 20.0) -> bool:
+    deadline = time.monotonic() + timeout_seconds
 
+    while time.monotonic() < deadline:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection('127.0.0.1', UI_PORT),
+                timeout=1.0,
+            )
+
+            request = (
+                'GET /api/health HTTP/1.1\r\n'
+                f'Host: 127.0.0.1:{UI_PORT}\r\n'
+                'Connection: close\r\n'
+                '\r\n'
+            )
+            writer.write(request.encode('ascii'))
+            await writer.drain()
+
+            response = await asyncio.wait_for(reader.read(512), timeout=1.0)
+
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+            if b'200 OK' in response:
+                return True
+
+        except Exception:
+            await asyncio.sleep(0.2)
+
+    return False
+
+
+async def _start_public_access_when_ready() -> None:
+    ready = await _wait_until_http_ready()
+
+    if not ready:
+        print(
+            'ADVERTENCIA: EcoSensor no confirmo /api/health a tiempo. '
+            'Se continuara con el arranque normal.',
+            flush=True,
+        )
+
+    try:
+        await asyncio.to_thread(start_mdns_service)
+    except Exception as exc:
+        print(f'ADVERTENCIA: no se pudo iniciar mDNS: {exc!r}', flush=True)
+
+    await asyncio.sleep(0.8)
+
+    try:
+        await asyncio.to_thread(open_main_browser)
+    except Exception as exc:
+        print(f'ADVERTENCIA: no se pudo abrir el navegador: {exc!r}', flush=True)
+
+def _schedule_public_access_startup() -> None:
+    asyncio.create_task(_start_public_access_when_ready())
+
+app.on_startup(_start_background_sync)
+app.on_startup(_schedule_public_access_startup)
 
 @app.get('/api/devices')
 async def devices_status() -> JSONResponse:
@@ -193,7 +256,6 @@ def graph_read(
     return JSONResponse({'ok': False, 'error': 'unknown_op', 'allowed': 'latest|history|history_count|history_page|since'}, status_code=400)
 
 
-start_mdns_service()
 ui.run(
     host=UI_HOST,
     port=UI_PORT,

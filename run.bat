@@ -26,7 +26,8 @@ if not exist ".\app\main.py" (
 
 echo Iniciando servidor...
 echo Abre en esta PC: http://localhost:8765
-echo En la red local usa mDNS: http://ecosensor-servidor.local:8765
+echo En la red local usa: http://ecosensor.local
+echo Si no abre, usa: http://ecosensor.local:8765
 echo.
 
 cd /d "%~dp0app"

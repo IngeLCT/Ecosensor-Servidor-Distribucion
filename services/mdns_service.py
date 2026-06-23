@@ -90,7 +90,7 @@ def start_mdns_service() -> None:
         },
         server=server_name,
     )
-    _zeroconf = Zeroconf()
+    _zeroconf = Zeroconf(interfaces=ips)
     try:
         _zeroconf.register_service(_service_info)
     except NonUniqueNameException:
