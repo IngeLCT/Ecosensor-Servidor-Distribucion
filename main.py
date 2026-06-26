@@ -2,16 +2,26 @@
 
 Esta variante excluye actualizaciones integradas y herramientas internas de diagnóstico.
 """
+import os
+import sys
+
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w', encoding='utf-8')
+
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w', encoding='utf-8')
+
+if sys.stdin is None:
+    sys.stdin = open(os.devnull, 'r', encoding='utf-8')
 
 import asyncio
-import importlib
 import time
 
 from services.windows_asyncio import install_connection_reset_filter, install_windows_selector_policy
 
 install_windows_selector_policy()
 
-from config import DEVICE_ID, STATIC_DIR, UI_HOST, UI_PORT  # debe cargarse antes de importar NiceGUI
+from config import DEVICE_ID, STATIC_DIR, UI_HOST, UI_PORT, UI_FALLBACK_PORT
 
 from fastapi import Query, Request
 from fastapi.responses import JSONResponse, Response
@@ -22,12 +32,14 @@ from services.main_window import open_main_browser
 from services.mdns_service import start_mdns_service
 from shared.formatters import row_from_payload
 from storage.measurements_store import graph_latest_row, graph_rows_count, graph_rows_history, graph_rows_page, graph_rows_since, measurements_csv_text, save_measurement, validate_measurements_for_csv
-
+import socket
 
 def _register_pages() -> None:
     """Carga módulos de páginas NiceGUI que registran rutas al importarse."""
-    for module_name in ('pages.connect_page', 'pages.dashboard_page', 'pages.graphs_page', 'pages.locations_page'):
-        importlib.import_module(module_name)
+    import pages.connect_page
+    import pages.dashboard_page
+    import pages.graphs_page
+    import pages.locations_page
 
 
 _register_pages()
@@ -47,6 +59,33 @@ def _start_background_sync() -> None:
     if _background_sync_task is None or _background_sync_task.done():
         _background_sync_task = asyncio.create_task(background_sync_loop())
 
+def _can_bind_port(host: str, port: int) -> bool:
+    test_host = host if host not in {'', '0.0.0.0'} else '0.0.0.0'
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((test_host, port))
+            return True
+    except OSError:
+        return False
+
+
+def _select_ui_port() -> int:
+    if _can_bind_port(UI_HOST, UI_PORT):
+        print(f'Puerto seleccionado: {UI_PORT}', flush=True)
+        return UI_PORT
+
+    print(f'ADVERTENCIA: el puerto {UI_PORT} no esta disponible. Intentando puerto {UI_FALLBACK_PORT}.', flush=True)
+
+    if _can_bind_port(UI_HOST, UI_FALLBACK_PORT):
+        print(f'Puerto seleccionado: {UI_FALLBACK_PORT}', flush=True)
+        return UI_FALLBACK_PORT
+
+    raise RuntimeError(
+        f'No se pudo iniciar EcoSensor: los puertos {UI_PORT} y {UI_FALLBACK_PORT} no estan disponibles.'
+    )
+
+SELECTED_UI_PORT = _select_ui_port()
 
 async def _wait_until_http_ready(timeout_seconds: float = 20.0) -> bool:
     deadline = time.monotonic() + timeout_seconds
@@ -54,13 +93,13 @@ async def _wait_until_http_ready(timeout_seconds: float = 20.0) -> bool:
     while time.monotonic() < deadline:
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection('127.0.0.1', UI_PORT),
+                asyncio.open_connection('127.0.0.1', SELECTED_UI_PORT),
                 timeout=1.0,
             )
 
             request = (
                 'GET /api/health HTTP/1.1\r\n'
-                f'Host: 127.0.0.1:{UI_PORT}\r\n'
+                f'Host: 127.0.0.1:{SELECTED_UI_PORT}\r\n'
                 'Connection: close\r\n'
                 '\r\n'
             )
@@ -95,14 +134,14 @@ async def _start_public_access_when_ready() -> None:
         )
 
     try:
-        await asyncio.to_thread(start_mdns_service)
+        await asyncio.to_thread(start_mdns_service, SELECTED_UI_PORT)
     except Exception as exc:
         print(f'ADVERTENCIA: no se pudo iniciar mDNS: {exc!r}', flush=True)
 
     await asyncio.sleep(0.8)
 
     try:
-        await asyncio.to_thread(open_main_browser)
+        await asyncio.to_thread(open_main_browser, SELECTED_UI_PORT)
     except Exception as exc:
         print(f'ADVERTENCIA: no se pudo abrir el navegador: {exc!r}', flush=True)
 
@@ -258,10 +297,10 @@ def graph_read(
 
 ui.run(
     host=UI_HOST,
-    port=UI_PORT,
-    title='EcoSensor Servidor',
+    port=SELECTED_UI_PORT,
+    title='EcoSensor',
     reload=False,
     show=False,
     reconnect_timeout=30.0,
-    storage_secret='ecosensor-servidor-local',
+    storage_secret='ecosensor-local',
 )

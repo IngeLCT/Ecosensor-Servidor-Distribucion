@@ -41,3 +41,6 @@ Installer/*.iss
 *.iss.tmp
 *.bak
 *.log
+
+#MSIX
+msix/

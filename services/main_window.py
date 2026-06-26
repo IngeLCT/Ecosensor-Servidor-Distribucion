@@ -126,6 +126,11 @@ def shutdown_if_main_window(client: Client) -> None:
     app.shutdown()
 
 
-def open_main_browser() -> None:
+def open_main_browser(port: int | None = None) -> None:
     """Abre la ventana principal local con token privado del proceso."""
+    selected_port = int(port or UI_PORT)
+    if selected_port == 80:
+        url = 'http://localhost'
+    else:
+        url = f'http://localhost:{selected_port}'
     webbrowser.open(f'http://127.0.0.1:{UI_PORT}/dashboard?main={MAIN_WINDOW_TOKEN}')
