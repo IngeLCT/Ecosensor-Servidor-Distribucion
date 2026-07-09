@@ -324,6 +324,8 @@ def _location_cluster_csv_text(cluster: LocationCluster) -> str:
     fieldnames = [
         'Fecha',
         'Hora',
+        'Latitud',
+        'Longitud',
         'PM1.0(µg/m³)',
         'PM2.5(µg/m³)',
         'PM4.0(µg/m³)',
@@ -340,6 +342,8 @@ def _location_cluster_csv_text(cluster: LocationCluster) -> str:
         writer.writerow({
             'Fecha': _format_date_display(row.get('fecha')),
             'Hora': str(row.get('hora') or ''),
+            'Latitud': f"{float(row.get('_lat')):.6f}",
+            'Longitud': f"{float(row.get('_lon')):.6f}",
             'PM1.0(µg/m³)': format_value(row.get('pm1p0')),
             'PM2.5(µg/m³)': format_value(row.get('pm2p5')),
             'PM4.0(µg/m³)': format_value(row.get('pm4p0')),
