@@ -18,6 +18,13 @@ os.environ.setdefault('NICEGUI_STORAGE_PATH', str(DATA_DIR / '.nicegui'))
 SETTINGS_FILE = DATA_DIR / 'settings.json'
 MEASUREMENTS_DB_FILE = DATA_DIR / 'measurements.sqlite3'
 
+REVERSE_GEOCODING_ENDPOINT = os.getenv(
+    'ECOSENSOR_REVERSE_GEOCODING_ENDPOINT',
+    'https://ambiental-lct.ecosensor.com.mx/api/reverse-geocode.php',
+)
+REVERSE_GEOCODING_PRECISION = int(os.getenv('ECOSENSOR_REVERSE_GEOCODING_PRECISION', '4'))
+REVERSE_GEOCODING_TIMEOUT_SECONDS = float(os.getenv('ECOSENSOR_REVERSE_GEOCODING_TIMEOUT_SECONDS', '8'))
+
 DEVICE_ID = 'ecosensor01'
 UI_HOST = os.getenv('ECOSENSOR_SERVER_HOST', '0.0.0.0')
 UI_PORT = int(os.getenv('ECOSENSOR_SERVER_PORT', '80'))

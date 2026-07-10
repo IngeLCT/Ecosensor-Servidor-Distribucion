@@ -12,6 +12,7 @@ from fastapi.responses import Response
 from nicegui import Client, app, events, ui
 
 from services.device_registry import active_device_options, ensure_active_devices, registry_revision
+from services.geocoding_client import coordinate_key, fallback_label, resolve_unique_locations
 from services.main_window import HEAVY_PAGE_SHUTDOWN_DELAY_SECONDS, register_main_window
 from shared.formatters import device_display_name, format_value
 from shared.styles import add_styles
@@ -25,6 +26,10 @@ class LocationCluster:
     lon_sum: float = 0.0
     count: int = 0
     rows: list[dict[str, Any]] = field(default_factory=list)
+    location_label: str = ''
+    location_formatted: str = ''
+    location_source: str = ''
+    location_cached_locally: bool = False
 
     @property
     def lat(self) -> float:
@@ -53,6 +58,10 @@ class LocationCluster:
         self.lon_sum += lon
         self.count += 1
         self.rows.append(row)
+
+    @property
+    def display_location(self) -> str:
+        return self.location_label or fallback_label(self.lat, self.lon)
 
 
 def _nav() -> None:
@@ -177,6 +186,19 @@ def _cluster_rows(rows: list[dict[str, Any]]) -> list[LocationCluster]:
     return clusters
 
 
+def _apply_location_labels(clusters: list[LocationCluster]) -> list[LocationCluster]:
+    points = [(cluster.lat, cluster.lon) for cluster in clusters]
+    resolved = resolve_unique_locations(points)
+    for cluster in clusters:
+        key = coordinate_key(cluster.lat, cluster.lon)
+        location = resolved.get(key) or {}
+        cluster.location_label = str(location.get('label') or '').strip() or fallback_label(cluster.lat, cluster.lon)
+        cluster.location_formatted = str(location.get('formatted') or '').strip()
+        cluster.location_source = str(location.get('source') or '').strip()
+        cluster.location_cached_locally = bool(location.get('cached_locally'))
+    return clusters
+
+
 def _extract_cluster_index(event: events.GenericEventArguments) -> int | None:
     args = event.args
     try:
@@ -221,11 +243,11 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
             mode='markers',
             customdata=[cluster.index for cluster in clusters],
             hovertext=[
+                f'{html.escape(cluster.display_location)}<br>'
                 f'Punto {cluster.index + 1}<br>'
                 f'Mediciones: {cluster.count}<br>'
                 f'Primera: {cluster.first_label}<br>'
-                f'Última: {cluster.last_label}<br>'
-                f'Centro: {cluster.lat:.6f}, {cluster.lon:.6f}'
+                f'Última: {cluster.last_label}'
                 for cluster in clusters
             ],
             marker=dict(
@@ -286,10 +308,10 @@ def _render_measurements_table(cluster: LocationCluster | None) -> str:
 
     summary = (
         f'<div class="locations-summary">Punto {cluster.index + 1}: '
+        f'{html.escape(cluster.display_location)} | '
         f'{cluster.count} mediciones | '
         f'Primera: {html.escape(cluster.first_label)} | '
-        f'Última: {html.escape(cluster.last_label)} | '
-        f'Centro: {cluster.lat:.6f}, {cluster.lon:.6f}</div>'
+        f'Última: {html.escape(cluster.last_label)}</div>'
     )
     return (
         summary
@@ -314,9 +336,8 @@ def _safe_filename_part(value: str) -> str:
 
 def _location_cluster_filename(device_id: str, cluster: LocationCluster) -> str:
     display_id = _safe_filename_part(device_display_name(device_id))
-    lat = _safe_coordinate_for_filename(cluster.lat)
-    lon = _safe_coordinate_for_filename(cluster.lon)
-    return f'{display_id}_Med_Ubi({lat}_{lon}).csv'
+    location = _safe_filename_part(cluster.display_location)
+    return f'{display_id}_Med_Ubi({location}).csv'
 
 
 def _location_cluster_csv_text(cluster: LocationCluster) -> str:
@@ -324,6 +345,7 @@ def _location_cluster_csv_text(cluster: LocationCluster) -> str:
     fieldnames = [
         'Fecha',
         'Hora',
+        'Ubicación',
         'Latitud',
         'Longitud',
         'PM1.0(µg/m³)',
@@ -342,6 +364,7 @@ def _location_cluster_csv_text(cluster: LocationCluster) -> str:
         writer.writerow({
             'Fecha': _format_date_display(row.get('fecha')),
             'Hora': str(row.get('hora') or ''),
+            'Ubicación': cluster.display_location,
             'Latitud': f"{float(row.get('_lat')):.6f}",
             'Longitud': f"{float(row.get('_lon')):.6f}",
             'PM1.0(µg/m³)': format_value(row.get('pm1p0')),
@@ -367,7 +390,7 @@ def download_location_cluster_csv(
         return Response('Falta device_id.\n', media_type='text/plain; charset=utf-8', status_code=400)
 
     rows = graph_rows_all(selected_device_id)
-    clusters = _cluster_rows(_valid_location_rows(rows))
+    clusters = _apply_location_labels(_cluster_rows(_valid_location_rows(rows)))
     if cluster_index < 0 or cluster_index >= len(clusters):
         return Response('No se encontro el punto seleccionado.\n', media_type='text/plain; charset=utf-8', status_code=404)
 
@@ -445,7 +468,7 @@ async def locations_page(request: Request, client: Client) -> None:
         try:
             rows = await asyncio.to_thread(graph_rows_all, selected_device_id)
             location_rows = _valid_location_rows(rows)
-            clusters = _cluster_rows(location_rows)
+            clusters = await asyncio.to_thread(_apply_location_labels, _cluster_rows(location_rows))
         except ModuleNotFoundError as exc:
             status.set_text(f'Falta instalar el paquete Python: {exc.name or "plotly"}')
             export_button.disable()
