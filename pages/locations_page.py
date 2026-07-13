@@ -264,9 +264,7 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
             hovertext=[
                 f'{html.escape(cluster.display_location)}<br>'
                 f'Registros agrupados: {cluster.count}<br>'
-                f'Radio aprox.: {cluster.radius_km:.1f} km<br>'
                 f'Coordenada: {cluster.lat:.4f}, {cluster.lon:.4f}<br>'
-                f'Fuente ubicación: {html.escape(cluster.geocoding_source or "fallback")}<br>'
                 f'Primera: {cluster.first_label}<br>'
                 f'Última: {cluster.last_label}'
                 for cluster in clusters
@@ -331,7 +329,6 @@ def _render_measurements_table(cluster: LocationCluster | None) -> str:
         f'<div class="locations-summary">Punto {cluster.index + 1}: '
         f'{html.escape(cluster.display_location)} | '
         f'{cluster.count} mediciones | '
-        f'Fuente ubicación: {html.escape(cluster.geocoding_source or "fallback")} | '
         f'Primera: {html.escape(cluster.first_label)} | '
         f'Última: {html.escape(cluster.last_label)}</div>'
     )
