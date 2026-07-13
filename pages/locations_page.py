@@ -11,8 +11,9 @@ from fastapi import Query, Request
 from fastapi.responses import Response
 from nicegui import Client, app, events, ui
 
+from config import NOMINATIM_MAX_LOOKUPS_PER_PAGE_LOAD
 from services.device_registry import active_device_options, ensure_active_devices, registry_revision
-from services.geocoding_client import coordinate_key, fallback_label, resolve_unique_locations
+from services.reverse_geocoding import coordinate_key, fallback_label, resolve_unique_locations
 from services.main_window import HEAVY_PAGE_SHUTDOWN_DELAY_SECONDS, register_main_window
 from shared.formatters import device_display_name, format_value
 from shared.styles import add_styles
@@ -28,7 +29,10 @@ class LocationCluster:
     rows: list[dict[str, Any]] = field(default_factory=list)
     location_label: str = ''
     location_formatted: str = ''
-    location_source: str = ''
+    location_city: str = ''
+    location_suburb: str = ''
+    location_state: str = ''
+    geocoding_source: str = ''
     location_cached_locally: bool = False
 
     @property
@@ -62,6 +66,12 @@ class LocationCluster:
     @property
     def display_location(self) -> str:
         return self.location_label or fallback_label(self.lat, self.lon)
+
+    @property
+    def radius_km(self) -> float:
+        if self.count <= 1:
+            return 0.0
+        return max(_haversine_km(self.lat, self.lon, float(row['_lat']), float(row['_lon'])) for row in self.rows)
 
 
 def _nav() -> None:
@@ -135,6 +145,12 @@ def _add_location_styles() -> None:
             text-align: center;
             margin: 8px 0 4px 0;
         }
+        .locations-attribution {
+            color: #20352f;
+            font-size: 14px;
+            text-align: center;
+            margin-top: 8px;
+        }
         </style>
         '''
     )
@@ -188,13 +204,16 @@ def _cluster_rows(rows: list[dict[str, Any]]) -> list[LocationCluster]:
 
 def _apply_location_labels(clusters: list[LocationCluster]) -> list[LocationCluster]:
     points = [(cluster.lat, cluster.lon) for cluster in clusters]
-    resolved = resolve_unique_locations(points)
+    resolved = resolve_unique_locations(points, max_remote_lookups=NOMINATIM_MAX_LOOKUPS_PER_PAGE_LOAD)
     for cluster in clusters:
         key = coordinate_key(cluster.lat, cluster.lon)
         location = resolved.get(key) or {}
         cluster.location_label = str(location.get('label') or '').strip() or fallback_label(cluster.lat, cluster.lon)
         cluster.location_formatted = str(location.get('formatted') or '').strip()
-        cluster.location_source = str(location.get('source') or '').strip()
+        cluster.location_city = str(location.get('city') or '').strip()
+        cluster.location_suburb = str(location.get('suburb') or location.get('neighbourhood') or location.get('district') or '').strip()
+        cluster.location_state = str(location.get('state') or '').strip()
+        cluster.geocoding_source = str(location.get('source') or '').strip() or 'fallback'
         cluster.location_cached_locally = bool(location.get('cached_locally'))
     return clusters
 
@@ -244,8 +263,10 @@ def _make_map_figure(clusters: list[LocationCluster], selected_index: int | None
             customdata=[cluster.index for cluster in clusters],
             hovertext=[
                 f'{html.escape(cluster.display_location)}<br>'
-                f'Punto {cluster.index + 1}<br>'
-                f'Mediciones: {cluster.count}<br>'
+                f'Registros agrupados: {cluster.count}<br>'
+                f'Radio aprox.: {cluster.radius_km:.1f} km<br>'
+                f'Coordenada: {cluster.lat:.4f}, {cluster.lon:.4f}<br>'
+                f'Fuente ubicación: {html.escape(cluster.geocoding_source or "fallback")}<br>'
                 f'Primera: {cluster.first_label}<br>'
                 f'Última: {cluster.last_label}'
                 for cluster in clusters
@@ -310,6 +331,7 @@ def _render_measurements_table(cluster: LocationCluster | None) -> str:
         f'<div class="locations-summary">Punto {cluster.index + 1}: '
         f'{html.escape(cluster.display_location)} | '
         f'{cluster.count} mediciones | '
+        f'Fuente ubicación: {html.escape(cluster.geocoding_source or "fallback")} | '
         f'Primera: {html.escape(cluster.first_label)} | '
         f'Última: {html.escape(cluster.last_label)}</div>'
     )
@@ -427,6 +449,7 @@ async def locations_page(request: Request, client: Client) -> None:
         with ui.element('div').classes('locations-card'):
             status = ui.label('').classes('locations-summary')
             chart = ui.plotly({}).classes('locations-map')
+            ui.label('Ubicaciones aproximadas usando datos de © OpenStreetMap contributors / Nominatim.').classes('locations-attribution')
             points_label = ui.label('Puntos marcados: 0').classes('locations-summary')
             table = ui.html('').classes('w-full')
             with ui.row().classes('justify-center mt-4'):
