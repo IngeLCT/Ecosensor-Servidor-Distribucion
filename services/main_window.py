@@ -126,11 +126,18 @@ def shutdown_if_main_window(client: Client) -> None:
     app.shutdown()
 
 
-def open_main_browser(port: int | None = None) -> None:
-    """Abre la ventana principal local con token privado del proceso."""
+def open_main_browser(port: int | None = None, *, include_main_token: bool = True) -> None:
+    """Abre la ventana principal local en el puerto seleccionado.
+
+    ``include_main_token`` solo debe usarse para la instancia que acaba de
+    arrancar. Si se abre una instancia EcoSensor ya existente desde un segundo
+    proceso, no se envía token porque ese proceso tiene otro token privado.
+    """
     selected_port = int(port or UI_PORT)
-    if selected_port == 80:
-        url = 'http://localhost'
-    else:
-        url = f'http://localhost:{selected_port}'
-    webbrowser.open(f'http://127.0.0.1:{UI_PORT}/dashboard?main={MAIN_WINDOW_TOKEN}')
+    base_url = 'http://127.0.0.1' if selected_port == 80 else f'http://127.0.0.1:{selected_port}'
+    url = f'{base_url}/dashboard'
+
+    if include_main_token:
+        url = f'{url}?main={MAIN_WINDOW_TOKEN}'
+
+    webbrowser.open(url)

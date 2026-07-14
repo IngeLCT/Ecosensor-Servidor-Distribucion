@@ -127,7 +127,7 @@ def _open_existing_instance_and_exit(port: int) -> NoReturn:
     )
 
     try:
-        open_main_browser(port)
+        open_main_browser(port, include_main_token=False)
     except Exception as exc:
         print(f'ADVERTENCIA: no se pudo abrir la instancia existente en el navegador: {exc!r}', flush=True)
 
