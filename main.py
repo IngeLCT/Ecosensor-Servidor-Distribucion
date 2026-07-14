@@ -2,8 +2,12 @@
 
 Esta variante excluye actualizaciones integradas y herramientas internas de diagnóstico.
 """
+import ctypes
+import json
 import os
 import sys
+import urllib.request
+from typing import NoReturn
 
 if sys.stdout is None:
     sys.stdout = open(os.devnull, 'w', encoding='utf-8')
@@ -21,7 +25,16 @@ from services.windows_asyncio import install_connection_reset_filter, install_wi
 
 install_windows_selector_policy()
 
-from config import DEVICE_ID, STATIC_DIR, UI_HOST, UI_PORT, UI_FALLBACK_PORT
+from config import (
+    DEVICE_ID,
+    STATIC_DIR,
+    UI_HOST,
+    UI_PORT,
+    UI_FALLBACK_PORT,
+    UI_PORT_CANDIDATES,
+    UI_PORT_SCAN_START,
+    UI_PORT_SCAN_END,
+)
 
 from fastapi import Query, Request
 from fastapi.responses import JSONResponse, Response
@@ -70,20 +83,103 @@ def _can_bind_port(host: str, port: int) -> bool:
         return False
 
 
-def _select_ui_port() -> int:
-    if _can_bind_port(UI_HOST, UI_PORT):
-        print(f'Puerto seleccionado: {UI_PORT}', flush=True)
-        return UI_PORT
+def _candidate_ports() -> list[int]:
+    ports: list[int] = []
 
-    print(f'ADVERTENCIA: el puerto {UI_PORT} no esta disponible. Intentando puerto {UI_FALLBACK_PORT}.', flush=True)
+    for port in [*UI_PORT_CANDIDATES, *range(UI_PORT_SCAN_START, UI_PORT_SCAN_END + 1)]:
+        if port < 1 or port > 65535:
+            continue
+        if port not in ports:
+            ports.append(port)
 
-    if _can_bind_port(UI_HOST, UI_FALLBACK_PORT):
-        print(f'Puerto seleccionado: {UI_FALLBACK_PORT}', flush=True)
-        return UI_FALLBACK_PORT
+    return ports
 
-    raise RuntimeError(
-        f'No se pudo iniciar EcoSensor: los puertos {UI_PORT} y {UI_FALLBACK_PORT} no estan disponibles.'
+
+def _is_existing_ecosensor_server(port: int) -> bool:
+    url = f'http://127.0.0.1:{port}/api/health'
+
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={'Accept': 'application/json', 'User-Agent': 'EcoSensorStartupCheck/1.0'},
+            method='GET',
+        )
+        with urllib.request.urlopen(request, timeout=0.75) as response:
+            if response.status != 200:
+                return False
+            payload = response.read(4096)
+    except Exception:
+        return False
+
+    try:
+        data = json.loads(payload.decode('utf-8'))
+    except Exception:
+        return False
+
+    return data.get('ok') is True and data.get('service') == 'EcoSensor Servidor'
+
+
+def _open_existing_instance_and_exit(port: int) -> NoReturn:
+    print(
+        f'EcoSensor ya esta corriendo en el puerto {port}. '
+        'Abriendo la instancia existente y cerrando esta segunda ejecucion.',
+        flush=True,
     )
+
+    try:
+        open_main_browser(port)
+    except Exception as exc:
+        print(f'ADVERTENCIA: no se pudo abrir la instancia existente en el navegador: {exc!r}', flush=True)
+
+    sys.exit(0)
+
+
+def _show_controlled_startup_error(message: str) -> None:
+    print(f'ERROR CONTROLADO: {message}', flush=True)
+
+    if sys.platform.startswith('win'):
+        try:
+            ctypes.windll.user32.MessageBoxW(None, message, 'EcoSensor', 0x10)
+            return
+        except Exception:
+            pass
+
+
+def _exit_no_available_port() -> NoReturn:
+    _show_controlled_startup_error(
+        'EcoSensor no pudo iniciar porque no encontro un puerto local disponible. '
+        'Cierra otras instancias de EcoSensor o reinicia el equipo.'
+    )
+    sys.exit(1)
+
+
+def _select_ui_port() -> int:
+    ports = _candidate_ports()
+    preferred_ports = {UI_PORT, UI_FALLBACK_PORT}
+    available_ports: list[int] = []
+
+    for port in ports:
+        if _can_bind_port(UI_HOST, port):
+            available_ports.append(port)
+            continue
+
+        if _is_existing_ecosensor_server(port):
+            _open_existing_instance_and_exit(port)
+
+        print(f'ADVERTENCIA: el puerto {port} no esta disponible para EcoSensor.', flush=True)
+
+    if available_ports:
+        selected_port = available_ports[0]
+        if selected_port not in preferred_ports:
+            print(
+                f'ADVERTENCIA: los puertos preferidos {UI_PORT} y {UI_FALLBACK_PORT} no estan disponibles. '
+                f'EcoSensor usara el puerto alternativo {selected_port}.',
+                flush=True,
+            )
+        print(f'Puerto seleccionado: {selected_port}', flush=True)
+        return selected_port
+
+    _exit_no_available_port()
 
 SELECTED_UI_PORT = _select_ui_port()
 
