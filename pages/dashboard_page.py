@@ -13,11 +13,70 @@ from shared.styles import add_styles
 from pages.pollutants_modal import pollutants_info_card
 
 
+def _add_dashboard_styles() -> None:
+    ui.add_head_html(
+        '''
+        <style>
+        .dashboard-hero {
+            display: grid;
+            grid-template-columns: minmax(190px, 250px) minmax(420px, 1fr) minmax(190px, 250px);
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 18px;
+        }
+        .dashboard-heading {
+            grid-column: 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .dashboard-qr-card {
+            grid-column: 1;
+            grid-row: 1;
+            align-items: center;
+            justify-self: center;
+            gap: 5px;
+            color: #040434;
+        }
+        .dashboard-qr-title {
+            font-size: 20px;
+            font-weight: 800;
+        }
+        .dashboard-qr-image {
+            width: 170px !important;
+            height: 170px !important;
+            padding: 7px;
+            background: #fff;
+            border: 2px solid #040434;
+            border-radius: 8px;
+        }
+        .dashboard-qr-link {
+            color: #0645ad !important;
+            font-size: 18px;
+            font-weight: 800;
+            text-decoration: underline;
+        }
+        @media (max-width: 900px) {
+            .dashboard-hero {
+                display: flex;
+                flex-direction: column;
+            }
+            .dashboard-heading,
+            .dashboard-qr-card {
+                width: 100%;
+            }
+        }
+        </style>
+        '''
+    )
+
+
 @ui.page('/dashboard')
 async def dashboard(request: Request, client: Client) -> None:
     await register_main_window(request, client)
     ui.page_title('EcoSensor Mediciones')
     add_styles()
+    _add_dashboard_styles()
 
     selected_device_id: str | None = None
     searching_option = '__searching_ecosensor__'
@@ -38,14 +97,21 @@ async def dashboard(request: Request, client: Client) -> None:
             ui.label('|')
             ui.link('Gráficas del Historial', '/graficas/historial')
 
-        with ui.element('div').classes('brand-header'):
-            ui.image('/static/LCT.png').props('fit=contain no-spinner').classes('connect-logo')
-            ui.label('EcoSensor®').classes('brand-name')
+        with ui.element('div').classes('dashboard-hero'):
+            with ui.column().classes('dashboard-qr-card'):
+                ui.label('Escanea para acceder').classes('dashboard-qr-title')
+                ui.image('/static/ecosensor_local_qr.svg').props('fit=contain no-spinner').classes('dashboard-qr-image')
+                ui.link('ecosensor.local', 'http://ecosensor.local', new_tab=True).classes('dashboard-qr-link')
 
-        ui.label('Mediciones Ambientales').classes('section-title dashboard-main-title')
-        with ui.row().classes('items-center justify-center gap-3 history-controls'):
-            ui.label('ID:').classes('section-title')
-            sensor_select = ui.select({}, value=None).props('outlined dense').classes('w-64 device-select')
+            with ui.element('div').classes('dashboard-heading'):
+                with ui.element('div').classes('brand-header'):
+                    ui.image('/static/LCT.png').props('fit=contain no-spinner').classes('connect-logo')
+                    ui.label('EcoSensor®').classes('brand-name')
+
+                ui.label('Mediciones Ambientales').classes('section-title dashboard-main-title')
+                with ui.row().classes('items-center justify-center gap-3 history-controls'):
+                    ui.label('ID:').classes('section-title')
+                    sensor_select = ui.select({}, value=None).props('outlined dense').classes('w-64 device-select')
 
         pollutants_info_card()
 
@@ -55,6 +121,10 @@ async def dashboard(request: Request, client: Client) -> None:
         connection_info = ui.label('').classes('status-line mt-3')
         with ui.row().classes('justify-center gap-3 mt-4'):
             csv_button = ui.button('Descargar CSV').props('unelevated no-caps').classes('button1')
+            analytics_button = ui.button(
+                'EcoSensor - Analitica',
+                on_click=lambda: ui.navigate.to('https://ecosensor.streamlit.app/', new_tab=True),
+            ).props('unelevated no-caps').classes('button1')
 
     def render_table(row: dict[str, Any] | None) -> None:
         if not row:

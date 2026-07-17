@@ -344,10 +344,6 @@ def _render_measurements_table(cluster: LocationCluster | None) -> str:
     )
 
 
-def _safe_coordinate_for_filename(value: float) -> str:
-    return f'{value:.6f}'.replace('.', 'p')
-
-
 def _safe_filename_part(value: str) -> str:
     safe = ''.join(ch if ch.isalnum() or ch in {'_', '-'} else '_' for ch in value)
     return safe.strip('_') or 'EcoSensor'
@@ -355,8 +351,10 @@ def _safe_filename_part(value: str) -> str:
 
 def _location_cluster_filename(device_id: str, cluster: LocationCluster) -> str:
     display_id = _safe_filename_part(device_display_name(device_id))
-    location = _safe_filename_part(cluster.display_location)
-    return f'{display_id}_Med_Ubi({location}).csv'
+    location_label = cluster.location_label if cluster.geocoding_source != 'fallback' else ''
+    location = _safe_filename_part(location_label or 'Ubicacion_no_disponible')
+    point_number = cluster.index + 1
+    return f'{display_id}_Punto_{point_number}_Med_Ubi({location}).csv'
 
 
 def _location_cluster_csv_text(cluster: LocationCluster) -> str:
