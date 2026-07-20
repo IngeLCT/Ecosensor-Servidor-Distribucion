@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from datetime import datetime
 from io import BytesIO
 from typing import Any
 
@@ -13,8 +14,9 @@ from services.device_registry import active_device_options, ensure_active_device
 from services.main_window import register_main_window
 from services.measurement_sync import schedule_preventive_history_sync, sync_before_csv_download, sync_sensor_measurements
 from shared.formatters import format_value
-from storage.measurements_store import get_latest_measurement
 from shared.styles import add_styles
+from shared.time_utils import to_server_local_naive
+from storage.measurements_store import get_latest_measurement
 from pages.pollutants_modal import pollutants_info_card
 
 
@@ -201,6 +203,17 @@ async def dashboard(request: Request, client: Client) -> None:
         value = (timestamp or '').strip()
         if not value:
             return '', ''
+
+        normalized = value[:-1] + '+00:00' if value.endswith('Z') else value
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            parsed = None
+
+        if parsed is not None and parsed.tzinfo is not None:
+            local_value = to_server_local_naive(parsed)
+            return local_value.strftime('%d-%m-%Y'), local_value.strftime('%H:%M:%S')
+
         if 'T' in value:
             date_part, time_part = value.split('T', 1)
             return format_date_dd_mm_yyyy(date_part), clean_time(time_part)
