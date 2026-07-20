@@ -45,7 +45,7 @@ MDNS_HOSTNAME = os.getenv('ECOSENSOR_MDNS_HOSTNAME', 'ecosensor')
 MDNS_SERVICE_TYPE = '_http._tcp.local.'
 DISABLE_MDNS = os.getenv('ECOSENSOR_DISABLE_MDNS', '').strip().lower() in {'1', 'true', 'yes', 'si', 'sí'}
 SHOW_PROBE_FAILURES = os.getenv('ECOSENSOR_SHOW_PROBE_FAILURES', '').strip().lower() in {'1', 'true', 'yes', 'si', 'sí'}
-LOCAL_TIMEZONE = os.getenv('ECOSENSOR_TIMEZONE', '').strip()
+LOCAL_TIMEZONE = os.getenv('ECOSENSOR_TIMEZONE', 'America/Mexico_City').strip() or 'America/Mexico_City'
 
 DEFAULT_ESP_HOST = f'{DEVICE_ID}.local'
 

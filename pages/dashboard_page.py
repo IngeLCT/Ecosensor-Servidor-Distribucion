@@ -1,6 +1,5 @@
 import asyncio
 import base64
-from datetime import datetime
 from io import BytesIO
 from typing import Any
 
@@ -15,7 +14,7 @@ from services.main_window import register_main_window
 from services.measurement_sync import schedule_preventive_history_sync, sync_before_csv_download, sync_sensor_measurements
 from shared.formatters import format_value
 from shared.styles import add_styles
-from shared.time_utils import to_server_local_naive
+from shared.time_utils import visible_date_time
 from storage.measurements_store import get_latest_measurement
 from pages.pollutants_modal import pollutants_info_card
 
@@ -191,36 +190,9 @@ async def dashboard(request: Request, client: Client) -> None:
             return f'{parts[2].zfill(2)}-{parts[1].zfill(2)}-{parts[0]}'
         return value
 
-    def clean_time(time_value: str) -> str:
-        value = (time_value or '').strip().rstrip('Z')
-        if '+' in value:
-            value = value.split('+', 1)[0]
-        if len(value) >= 8 and value[2] == ':' and value[5] == ':':
-            return value[:8]
-        return value
-
     def split_timestamp(timestamp: str) -> tuple[str, str]:
-        value = (timestamp or '').strip()
-        if not value:
-            return '', ''
-
-        normalized = value[:-1] + '+00:00' if value.endswith('Z') else value
-        try:
-            parsed = datetime.fromisoformat(normalized)
-        except ValueError:
-            parsed = None
-
-        if parsed is not None and parsed.tzinfo is not None:
-            local_value = to_server_local_naive(parsed)
-            return local_value.strftime('%d-%m-%Y'), local_value.strftime('%H:%M:%S')
-
-        if 'T' in value:
-            date_part, time_part = value.split('T', 1)
-            return format_date_dd_mm_yyyy(date_part), clean_time(time_part)
-        if ' ' in value:
-            date_part, time_part = value.split(' ', 1)
-            return format_date_dd_mm_yyyy(date_part), clean_time(time_part)
-        return format_date_dd_mm_yyyy(value), ''
+        date_part, time_part = visible_date_time(timestamp)
+        return format_date_dd_mm_yyyy(date_part), time_part
 
     async def refresh_sensor_options() -> None:
         nonlocal selected_device_id

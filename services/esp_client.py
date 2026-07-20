@@ -3,13 +3,15 @@ import json
 import re
 import socket
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from config import UI_PORT
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
+
+from shared.time_utils import parse_timestamp, unix_epoch, utc_now
 
 
 TIME_DRIFT_SYNC_THRESHOLD_SECONDS = 10 * 60
@@ -223,42 +225,24 @@ def _local_ip_for_target(target_host: str) -> str | None:
 
 
 def _parse_device_datetime(value: Any) -> datetime | None:
-    text = str(value or '').strip()
-    if not text:
-        return None
-
-    # En este proyecto el dashboard muestra la hora del EcoSensor en crudo
-    # (por ejemplo 2026-05-28T12:27:52Z se ve como 12:27:52). Para detectar
-    # desfases usamos esa misma referencia visual/local y no convertimos la Z
-    # como zona UTC real.
-    if text.endswith('Z'):
-        text = text[:-1]
-    if 'T' in text:
-        text = text.replace('T', ' ', 1)
-    if '+' in text:
-        text = text.split('+', 1)[0]
-    if len(text) > 19:
-        text = text[:19]
-
-    for fmt in ('%d-%m-%Y %H:%M:%S', '%Y-%m-%d %H:%M:%S'):
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            pass
-    return None
+    return parse_timestamp(value)
 
 
 def _time_drift_seconds(status_data: dict[str, Any]) -> int | None:
-    candidates = (
-        status_data.get('current_datetime'),
-        status_data.get('last_measurement_timestamp'),
-    )
+    now_epoch = int(utc_now().timestamp())
+    reported_epoch = status_data.get('current_epoch')
+    try:
+        if reported_epoch is not None:
+            return now_epoch - int(reported_epoch)
+    except (TypeError, ValueError):
+        pass
+
+    candidates = (status_data.get('current_datetime'), status_data.get('last_measurement_timestamp'))
     drifts: list[int] = []
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
     for value in candidates:
-        device_dt = _parse_device_datetime(value)
-        if device_dt is not None:
-            drifts.append(int((now - device_dt).total_seconds()))
+        device_epoch = unix_epoch(value)
+        if device_epoch is not None:
+            drifts.append(now_epoch - device_epoch)
     if not drifts:
         return None
     return max(drifts, key=lambda item: abs(item))
@@ -271,6 +255,10 @@ def sync_time_if_needed_sync(host: str, timeout: float = 4.0) -> dict[str, Any]:
         return {'ok': False, 'host': host, 'status': status, 'synced': False}
 
     status_data = status['data']
+    source = str(status_data.get('time_source') or status_data.get('last_sync_source') or '').lower()
+    if bool(status_data.get('time_valid')) and source in {'gps', 'ntp'}:
+        return {'ok': True, 'host': host, 'status': status, 'synced': False,
+                'time_drift_s': _time_drift_seconds(status_data), 'protected_source': source}
     needs_sync = bool(status_data.get('needs_time_sync', not status_data.get('time_valid', False)))
     drift_s = _time_drift_seconds(status_data)
     drift_exceeded = drift_s is not None and abs(drift_s) > TIME_DRIFT_SYNC_THRESHOLD_SECONDS
@@ -426,9 +414,10 @@ async def autoconnect_and_sync(saved_host: str, default_host: str) -> dict[str, 
     return last_result
 
 
-def system_datetime_payload(target_host: str | None = None) -> dict[str, str]:
-    now = datetime.now(timezone.utc)
+def system_datetime_payload(target_host: str | None = None) -> dict[str, Any]:
+    now = utc_now()
     payload = {
+        'epoch': int(now.timestamp()),
         'date': now.strftime('%d-%m-%Y'),
         'time': now.strftime('%H:%M:%S'),
     }

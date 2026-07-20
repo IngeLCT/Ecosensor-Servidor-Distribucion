@@ -348,8 +348,8 @@ async def download_measurements_csv(device_id: str | None = Query(default=None))
             status_code=409,
         )
 
-    # Defensa principal: incluso si el botón o el navegador llaman directo al CSV,
-    # primero sincronizar, reparar fechas/hora y validar. Nunca entregar CSV malo.
+    # Defensa principal: sincroniza el historial y valida antes de descargar.
+    # La generación/validación del CSV no modifica timestamps almacenados.
     sync_result = await sync_before_csv_download(filename_id)
     if not sync_result.get('ok'):
         return Response(

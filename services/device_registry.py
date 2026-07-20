@@ -10,6 +10,7 @@ from typing import Any
 from config import DEFAULT_ESP_HOST, DEVICE_ID, SHOW_PROBE_FAILURES
 from services.esp_client import build_endpoints, fetch_json_sync, normalize_host_input
 from shared.formatters import device_display_name
+from shared.time_utils import parse_timestamp, utc_now, utc_now_iso
 from storage.settings_store import load_settings, save_settings
 
 # Un EcoSensor no debe desaparecer por un fallo puntual de mDNS/red, pero el
@@ -37,7 +38,7 @@ _registry_revision = 0
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec='seconds')
+    return utc_now_iso()
 
 
 def _host_port(value: str) -> tuple[str, int]:
@@ -428,11 +429,13 @@ def _mark_probe_failure(host: str, error: Any) -> None:
 
 
 def _prune_expired() -> None:
-    now = datetime.now()
+    now = utc_now()
     expired: list[str] = []
     for device_id, entry in _active_devices.items():
         try:
-            last_seen = datetime.fromisoformat(str(entry.get('last_seen') or ''))
+            last_seen = parse_timestamp(entry.get('last_seen'))
+            if last_seen is None:
+                raise ValueError
         except ValueError:
             expired.append(device_id)
             continue
@@ -457,11 +460,13 @@ def recently_seen_devices(max_age_seconds: float) -> list[dict[str, Any]]:
     pero el ciclo automático de sincronización debe ser más estricto: si el
     refresco actual no pudo confirmar un sensor, no debe intentar sincronizarlo.
     """
-    now = datetime.now()
+    now = utc_now()
     fresh: list[dict[str, Any]] = []
     for item in active_devices():
         try:
-            last_seen = datetime.fromisoformat(str(item.get('last_seen') or ''))
+            last_seen = parse_timestamp(item.get('last_seen'))
+            if last_seen is None:
+                raise ValueError
         except ValueError:
             continue
         if now - last_seen <= timedelta(seconds=max_age_seconds):
@@ -489,7 +494,7 @@ def probe_failures() -> list[dict[str, Any]]:
 def _refresh_is_stale() -> bool:
     if _last_refresh_at is None:
         return True
-    return datetime.now() - _last_refresh_at > timedelta(seconds=DISCOVERY_REFRESH_INTERVAL_SECONDS)
+    return utc_now() - _last_refresh_at > timedelta(seconds=DISCOVERY_REFRESH_INTERVAL_SECONDS)
 
 
 def _schedule_refresh() -> None:
@@ -566,7 +571,7 @@ async def refresh_active_devices() -> list[dict[str, Any]]:
                 await probe_host(host, timeout=timeout)
 
         await asyncio.gather(*(limited_probe(host) for host in all_hosts))
-        _last_refresh_at = datetime.now()
+        _last_refresh_at = utc_now()
         _prune_expired()
         return active_devices()
 

@@ -11,6 +11,7 @@ from services.device_registry import active_device_options, ensure_active_device
 from services.main_window import HEAVY_PAGE_SHUTDOWN_DELAY_SECONDS, register_main_window
 from shared.formatters import device_display_name
 from shared.styles import add_styles
+from shared.time_utils import server_local_now_naive
 from storage.measurements_store import graph_latest_row, graph_rows_count, graph_rows_history, graph_rows_page
 
 
@@ -364,7 +365,6 @@ def _parse_row_datetime(row: dict[str, Any]) -> datetime | None:
     elif len(parts) == 3:
         fecha = f'{parts[0]}-{parts[1].zfill(2)}-{parts[2].zfill(2)}'
 
-    hora = hora.rstrip('Z').split('+', 1)[0]
     if len(hora) == 5:
         hora = f'{hora}:00'
 
@@ -494,7 +494,7 @@ def _seconds_until_next_realtime_refresh(frame: Any | None) -> float:
             last_dt = last_dt.replace(tzinfo=None)
         probe_start = last_dt + timedelta(minutes=SAMPLE_BASE_MIN, seconds=-REALTIME_PRECHECK_SECONDS)
         probe_end = probe_start + timedelta(seconds=REALTIME_POLL_WINDOW_SECONDS)
-        now = datetime.now()
+        now = server_local_now_naive()
     except Exception:
         return REALTIME_RETRY_SECONDS
 
@@ -1175,4 +1175,3 @@ async def history_graph(request: Request, client: Client) -> None:
     history_range.on('update:model-value', on_history_range_change)
     selector.on('update:model-value', lambda: ui.timer(0.1, rebuild, once=True))
     ui.timer(0.1, load_history, once=True)
-

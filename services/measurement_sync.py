@@ -15,7 +15,7 @@ from services.device_registry import (
 )
 from services.esp_client import build_endpoints, configure_push_host, fetch_json, fetch_readings_export, fetch_readings_range, sync_time_if_needed
 from shared.formatters import row_from_payload
-from shared.time_utils import server_local_now, to_server_local_naive
+from shared.time_utils import parse_timestamp, server_local_now
 from storage.measurements_store import (
     get_latest_measurement,
     latest_source_id,
@@ -76,11 +76,6 @@ def _lock_for(device_id: str) -> asyncio.Lock:
     return _sync_locks[device_id]
 
 
-def _iso_local(dt: datetime) -> str:
-    """Devuelve fecha/hora local del servidor, sin marcarla como UTC."""
-    return to_server_local_naive(dt).isoformat(timespec='seconds')
-
-
 def _bool_or_none(value: Any) -> bool | None:
     if value is None:
         return None
@@ -97,26 +92,10 @@ def _enrich_time_metadata(item: dict[str, Any], current_uptime_s: Any, server_no
     parsed_time_valid = _bool_or_none(item.get('time_valid'))
     time_valid = bool(parsed_time_valid) or (parsed_time_valid is None and bool(item.get('timestamp')))
     item['time_valid'] = time_valid
-    item['time_source'] = 'esp' if time_valid else 'estimated'
-
-    if time_valid and item.get('timestamp'):
-        return
-
-    same_boot = str(item.get('boot_id') or '') == str(current_boot_id or '') if current_boot_id is not None else True
-    if not same_boot:
-        return
-
-    try:
-        current_uptime = float(current_uptime_s)
-        measurement_uptime = float(item.get('uptime_s'))
-    except (TypeError, ValueError):
-        return
-
-    elapsed_since_measurement = max(0.0, current_uptime - measurement_uptime)
-    estimated = server_now - timedelta(seconds=elapsed_since_measurement)
-    if estimated > server_now:
-        estimated = server_now
-    item['timestamp'] = _iso_local(estimated)
+    item['time_source'] = item.get('time_source') or ('esp' if time_valid else 'uptime')
+    if time_valid and parse_timestamp(item.get('timestamp')) is None:
+        item['time_valid'] = False
+        item['time_source'] = 'invalid_timestamp'
 
 
 def _apply_status_latest_timestamp(item: dict[str, Any], status_data: Any) -> bool:
@@ -163,18 +142,7 @@ def _apply_status_latest_timestamp(item: dict[str, Any], status_data: Any) -> bo
 
 
 def _parse_dt(value: Any) -> datetime | None:
-    text = str(value or '').strip()
-    if not text:
-        return None
-    if text.endswith('Z'):
-        text = text[:-1] + '+00:00'
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.astimezone()
-    return parsed.astimezone()
+    return parse_timestamp(value)
 
 
 def _push_overdue(row: dict[str, Any] | None) -> tuple[bool, int, int]:
@@ -275,8 +243,6 @@ async def _save_remote_rows(
     min_seen_source_id = 0
     max_seen_source_id = 0
     server_now = server_local_now()
-    last_estimated: datetime | None = None
-
     prepared_rows: list[dict[str, Any]] = []
 
     for item in rows:
@@ -306,20 +272,9 @@ async def _save_remote_rows(
         else:
             _enrich_time_metadata(item, current_uptime_s, server_now, current_boot_id)
 
-        if not item.get('timestamp') and not historical_row:
-            window_s = item.get('window_s') or 300
-            try:
-                step = max(1, int(window_s))
-            except (TypeError, ValueError):
-                step = 300
-            if last_estimated is None:
-                last_estimated = server_now - timedelta(seconds=step * max(1, len(rows)))
-            else:
-                last_estimated = last_estimated + timedelta(seconds=step)
-            if last_estimated > server_now:
-                last_estimated = server_now
-            item['timestamp'] = _iso_local(last_estimated)
-            item['time_source'] = 'estimated_sequence'
+        if not item.get('timestamp'):
+            item['time_valid'] = False
+            item['time_source'] = item.get('time_source') or 'uptime'
         prepared_rows.append(item)
 
     if prepared_rows:
@@ -875,8 +830,6 @@ async def sync_before_csv_download(device_id: str | None = None) -> dict[str, An
             'error': f'sync_failed: {exc}',
             'message': 'No se pudo sincronizar el historial antes de descargar el CSV.',
         }
-
-    await asyncio.to_thread(repair_historical_invalid_timestamps, target_id)
 
     try:
         latest_remote_id = int((row or {}).get('measurement_id') or 0)
