@@ -123,7 +123,7 @@ if ($LASTEXITCODE -ne 0) { throw "Fallo actualizando pip." }
 if ($LASTEXITCODE -ne 0) { throw "Fallo instalando requirements.txt." }
 
 Write-Step "Validando imports principales"
-& $PythonExe -c "import nicegui, fastapi, zeroconf; print('Dependencias OK')"
+& $PythonExe -c "import nicegui, fastapi, zeroconf, qrcode; print('Dependencias OK')"
 if ($LASTEXITCODE -ne 0) { throw "Fallo validando dependencias principales." }
 
 Write-Step "Validando sintaxis de la app"

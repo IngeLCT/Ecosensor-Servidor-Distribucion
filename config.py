@@ -40,6 +40,7 @@ UI_FALLBACK_PORT = int(os.getenv('ECOSENSOR_SERVER_FALLBACK_PORT', '8765'))
 UI_PORT_SCAN_START = int(os.getenv('ECOSENSOR_SERVER_PORT_SCAN_START', '8766'))
 UI_PORT_SCAN_END = int(os.getenv('ECOSENSOR_SERVER_PORT_SCAN_END', '8799'))
 UI_PORT_CANDIDATES = [UI_PORT, UI_FALLBACK_PORT]
+SELECTED_UI_PORT = UI_PORT
 MDNS_HOSTNAME = os.getenv('ECOSENSOR_MDNS_HOSTNAME', 'ecosensor')
 MDNS_SERVICE_TYPE = '_http._tcp.local.'
 DISABLE_MDNS = os.getenv('ECOSENSOR_DISABLE_MDNS', '').strip().lower() in {'1', 'true', 'yes', 'si', 'sí'}
@@ -47,6 +48,15 @@ SHOW_PROBE_FAILURES = os.getenv('ECOSENSOR_SHOW_PROBE_FAILURES', '').strip().low
 LOCAL_TIMEZONE = os.getenv('ECOSENSOR_TIMEZONE', '').strip()
 
 DEFAULT_ESP_HOST = f'{DEVICE_ID}.local'
+
+
+def set_selected_ui_port(port: int) -> None:
+    global SELECTED_UI_PORT
+    SELECTED_UI_PORT = port
+
+
+def get_selected_ui_port() -> int:
+    return SELECTED_UI_PORT
 
 DEFAULT_SETTINGS = {
     'esp_host': DEFAULT_ESP_HOST,

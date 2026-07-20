@@ -1,9 +1,14 @@
 import asyncio
+import base64
+from io import BytesIO
 from typing import Any
 
+import qrcode
+import qrcode.image.svg
 from fastapi import Request
 from nicegui import Client, app, ui
 
+from config import get_selected_ui_port
 from services.device_registry import active_device_options, ensure_active_devices, registry_revision
 from services.main_window import register_main_window
 from services.measurement_sync import schedule_preventive_history_sync, sync_before_csv_download, sync_sensor_measurements
@@ -11,6 +16,28 @@ from shared.formatters import format_value
 from storage.measurements_store import get_latest_measurement
 from shared.styles import add_styles
 from pages.pollutants_modal import pollutants_info_card
+
+
+def _local_access_url() -> tuple[str, str]:
+    port = get_selected_ui_port()
+    address = 'ecosensor.local' if port == 80 else f'ecosensor.local:{port}'
+    return address, f'http://{address}'
+
+
+def _qr_data_url(target_url: str) -> str:
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(target_url)
+    qr.make(fit=True)
+    image = qr.make_image(image_factory=qrcode.image.svg.SvgPathImage)
+    output = BytesIO()
+    image.save(output)
+    encoded = base64.b64encode(output.getvalue()).decode('ascii')
+    return f'data:image/svg+xml;base64,{encoded}'
 
 
 def _add_dashboard_styles() -> None:
@@ -82,6 +109,8 @@ async def dashboard(request: Request, client: Client) -> None:
     searching_option = '__searching_ecosensor__'
     seen_registry_revision = {'value': registry_revision()}
     quick_sync_tasks: dict[str, asyncio.Task] = {}
+    local_address, local_url = _local_access_url()
+    qr_data_url = _qr_data_url(local_url)
 
     with ui.element('div').classes('dashboard'):
         with ui.element('nav').classes('top-nav'):
@@ -100,8 +129,8 @@ async def dashboard(request: Request, client: Client) -> None:
         with ui.element('div').classes('dashboard-hero'):
             with ui.column().classes('dashboard-qr-card'):
                 ui.label('Escanea para acceder').classes('dashboard-qr-title')
-                ui.image('/static/ecosensor_local_qr.svg').props('fit=contain no-spinner').classes('dashboard-qr-image')
-                ui.link('ecosensor.local', 'http://ecosensor.local', new_tab=True).classes('dashboard-qr-link')
+                ui.image(qr_data_url).props('fit=contain no-spinner').classes('dashboard-qr-image')
+                ui.link(local_address, local_url, new_tab=True).classes('dashboard-qr-link')
 
             with ui.element('div').classes('dashboard-heading'):
                 with ui.element('div').classes('brand-header'):

@@ -34,6 +34,7 @@ from config import (
     UI_PORT_CANDIDATES,
     UI_PORT_SCAN_START,
     UI_PORT_SCAN_END,
+    set_selected_ui_port,
 )
 
 from fastapi import Query, Request
@@ -182,6 +183,7 @@ def _select_ui_port() -> int:
     _exit_no_available_port()
 
 SELECTED_UI_PORT = _select_ui_port()
+set_selected_ui_port(SELECTED_UI_PORT)
 
 async def _wait_until_http_ready(timeout_seconds: float = 20.0) -> bool:
     deadline = time.monotonic() + timeout_seconds
