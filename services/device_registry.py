@@ -404,6 +404,16 @@ def mark_device_seen(device_id: str, host: str, status_data: dict[str, Any] | No
     return _mark_active(host, status_data or {'device_id': device_id}, device_id)
 
 
+def invalidate_device_status(device_id: str) -> None:
+    """Invalida únicamente el /status cacheado, conservando el host conocido."""
+    global _registry_revision
+    entry = _active_devices.get(str(device_id or '').strip().lower())
+    if entry is not None:
+        entry['status'] = {}
+        entry['last_seen'] = ''
+        _registry_revision += 1
+
+
 def _summarize_probe_error(error: Any) -> str:
     text = str(error or 'sin respuesta').strip()
     lower = text.lower()

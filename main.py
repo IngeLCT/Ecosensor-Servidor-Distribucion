@@ -1,7 +1,4 @@
-"""Punto de entrada para EcoSensor Servidor - versión de distribución.
-
-Esta variante excluye actualizaciones integradas y herramientas internas de diagnóstico.
-"""
+"""Punto de entrada para EcoSensor Servidor - versión de distribución."""
 import ctypes
 import json
 import os
@@ -38,12 +35,14 @@ from config import (
 )
 
 from fastapi import Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from nicegui import app, ui
 from services.device_registry import ensure_active_devices, mark_device_seen, normalize_device_id, probe_failures, remember_host
-from services.measurement_sync import background_sync_loop, is_history_syncing, schedule_preventive_history_sync, sync_before_csv_download
+from services.measurement_sync import background_sync_loop, coordinated_clear_history, is_history_syncing, schedule_preventive_history_sync, sync_before_csv_download
+from services.history_reset_state import accept_push_id, quarantine_push
 from services.main_window import open_main_browser
 from services.mdns_service import start_mdns_service
+from services.ota_manager import OtaError, firmware_file_path, load_manifest, ota_status, start_device_ota
 from shared.formatters import row_from_payload
 from storage.measurements_store import graph_latest_row, graph_rows_count, graph_rows_history, graph_rows_page, graph_rows_since, measurements_csv_text, save_measurement, validate_measurements_for_csv
 import socket
@@ -255,6 +254,41 @@ async def devices_status() -> JSONResponse:
     return JSONResponse({'ok': True, 'active': active, 'failures': probe_failures()})
 
 
+@app.get('/firmware/{device_id}/manifest.json')
+def firmware_manifest(device_id: str) -> JSONResponse:
+    try:
+        return JSONResponse(load_manifest(device_id))
+    except OtaError as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=404)
+
+
+@app.get('/firmware/{device_id}/{filename}', response_model=None)
+def firmware_binary(device_id: str, filename: str):
+    try:
+        return FileResponse(firmware_file_path(device_id, filename), media_type='application/octet-stream')
+    except OtaError as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=404)
+
+
+@app.post('/api/ota/start')
+async def api_ota_start(device_id: str = Query(...), force_same_version: bool = Query(default=False)) -> JSONResponse:
+    result = await start_device_ota(device_id, force_same_version=force_same_version)
+    return JSONResponse(result, status_code=200 if result.get('ok') else 409)
+
+
+@app.get('/api/ota/status')
+async def api_ota_status(device_id: str = Query(...)) -> JSONResponse:
+    result = await ota_status(device_id)
+    return JSONResponse(result, status_code=200 if result.get('ok') else 409)
+
+
+@app.post('/api/history/reset')
+async def api_history_reset(device_id: str = Query(...)) -> JSONResponse:
+    """Ejecuta el mismo borrado coordinado y confirmado que la interfaz local."""
+    result = await coordinated_clear_history(device_id)
+    return JSONResponse(result, status_code=200 if result.get('ok') else 409)
+
+
 @app.post('/api/measurements/push')
 async def api_measurements_push(request: Request) -> JSONResponse:
     """Recibe una medición promedio enviada directamente por un EcoSensor."""
@@ -273,6 +307,11 @@ async def api_measurements_push(request: Request) -> JSONResponse:
     device_id = normalize_device_id(row.get('id') or row.get('device_id'))
     if not device_id:
         return JSONResponse({'ok': False, 'error': 'invalid_device_id'}, status_code=400)
+
+    accepted, reject_reason = accept_push_id(device_id, row.get('measurement_id'))
+    if not accepted:
+        quarantine_push(device_id, payload)
+        return JSONResponse({'ok': False, 'error': reject_reason, 'device_id': device_id}, status_code=409)
 
     row['id'] = device_id
     row['device_id'] = device_id

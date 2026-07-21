@@ -69,6 +69,15 @@ foreach ($file in $sourceFiles) {
 }
 Write-Host "Archivos .py copiados: $copied" -ForegroundColor Green
 
+Write-Step "Copiando firmware OTA y manifests actualizados"
+$FirmwareSource = Join-Path $SourceDir "firmware"
+$FirmwareDest = Join-Path $AppDir "firmware"
+if (!(Test-Path $FirmwareSource)) {
+    throw "No existe la carpeta OTA: $FirmwareSource"
+}
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $FirmwareDest
+Copy-Item -Recurse -Force $FirmwareSource $FirmwareDest
+
 Write-Step "Copiando config.bat, run.bat y run_hidden.vbs actualizados"
 Copy-Item -Force (Join-Path $SourceDir "config.bat") (Join-Path $PortableDir "config.bat")
 Copy-Item -Force (Join-Path $SourceDir "run.bat") (Join-Path $PortableDir "run.bat")
@@ -111,7 +120,10 @@ $requiredPaths = @(
     "services\windows_asyncio.py",
     "pages\__init__.py",
     "shared\__init__.py",
-    "storage\__init__.py"
+    "storage\__init__.py",
+    "firmware\ecosensor01\manifest.json",
+    "firmware\ecosensor02\manifest.json",
+    "firmware\ecosensor03\manifest.json"
 )
 foreach ($required in $requiredPaths) {
     $full = Join-Path $AppDir $required

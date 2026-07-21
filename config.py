@@ -4,6 +4,7 @@ from pathlib import Path
 APP_NAME = 'EcoSensor'
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / 'static'
+FIRMWARE_DIR = APP_DIR / 'firmware'
 
 _DATA_DIR_OVERRIDE = os.getenv('ECOSENSOR_DATA_DIR')
 

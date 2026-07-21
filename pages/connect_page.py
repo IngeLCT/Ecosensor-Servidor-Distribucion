@@ -5,10 +5,11 @@ from nicegui import Client, app, ui
 
 from services.device_registry import active_device_options, ensure_active_devices, ensure_device_active, forget_device, host_for_device, probe_host, registry_revision, remember_host
 from services.main_window import register_main_window
-from services.esp_client import build_endpoints, delete_json, sync_time_if_needed
+from services.esp_client import build_endpoints, sync_time_if_needed
+from services.measurement_sync import coordinated_clear_history
+from services.ota_manager import start_device_ota
 from shared.formatters import device_display_name
 from shared.styles import add_styles
-from storage.measurements_store import clear_measurements
 
 LOCAL_CLIENTS = {'127.0.0.1', '::1', 'localhost'}
 
@@ -61,6 +62,7 @@ async def config_page(request: Request, client: Client) -> None:
                 with ui.row().classes('justify-center gap-3'):
                     clear_wifi_button = ui.button('Borrar datos de WiFi').props('unelevated color=negative text-color=white no-caps').classes('danger-outline-button action-button')
                     clear_history_button = ui.button('Borrar historial de mediciones').props('unelevated color=negative text-color=white no-caps').classes('danger-button action-button')
+                    ota_button = ui.button('Actualizar firmware OTA').props('unelevated no-caps').classes('action-button')
 
     async def refresh_sensor_options() -> None:
         nonlocal selected_device_id
@@ -162,18 +164,27 @@ async def config_page(request: Request, client: Client) -> None:
 
                 async def confirm() -> None:
                     dialog.close()
-                    result = await delete_json(build_endpoints(host)['readings_clear'])
+                    result = await coordinated_clear_history(device_id)
                     if not result.get('ok'):
-                        ui.notify(f'No se pudo borrar CSV de {display_name}: {result.get("data")}', color='negative')
+                        ui.notify(f'No se pudo completar el borrado coordinado de {display_name}: {result.get("error")}', color='negative')
                         return
-                    detected = await probe_host(host, timeout=1.5)
-                    target_device_id = str((detected or {}).get('device_id') or device_id)
-                    deleted = clear_measurements(target_device_id)
+                    target_device_id = str(result.get('device_id') or device_id)
+                    deleted = int(result.get('deleted') or 0)
                     ui.notify(f'Historial de {device_display_name(target_device_id)} borrado. Filas locales eliminadas: {deleted}.', color='positive')
                     await refresh_sensor_options()
 
                 ui.button('Borrar historial', on_click=confirm).props('unelevated color=negative')
         dialog.open()
+
+    async def update_firmware() -> None:
+        device_id, host = await selected_host()
+        if not device_id or not host:
+            return
+        result = await start_device_ota(device_id)
+        if result.get('ok'):
+            ui.notify(f'OTA enviada a {device_display_name(device_id)}. El dispositivo se reiniciará al terminar.', color='positive')
+        else:
+            ui.notify(f'No se pudo iniciar OTA: {result.get("error")}', color='negative')
 
     async def on_sensor_change(event: Any) -> None:
         nonlocal selected_device_id
@@ -195,5 +206,6 @@ async def config_page(request: Request, client: Client) -> None:
     connect_button.on('click', connect)
     clear_wifi_button.on('click', clear_wifi)
     clear_history_button.on('click', clear_history)
+    ota_button.on('click', update_firmware)
     ui.timer(1.0, refresh_options_if_registry_changed)
     ui.timer(0.1, refresh_sensor_options, once=True)

@@ -1,0 +1,15 @@
+{
+  "device_id": "ecosensor03",
+  "version": "1.0.51",
+  "filename": "ecosensor03_v1.0.51.bin",
+  "enabled": true,
+  "size_bytes": 1123168,
+  "sha256": "D6423E1F1B79861C9EE2EEE59AF0DDA057EF6EF2CE1C8501A5C73A0B5C8A09A4",
+  "release_date": "2026-07-20",
+  "flash_artifacts": {
+    "bootloader": {"filename": "bootloader.bin", "offset": "0x1000", "size_bytes": 26320, "sha256": "0E2E8B0A6219D48B76A9BC9E3A3562976CCC900500DB3EA94F6C3219401E4DE1"},
+    "partition_table": {"filename": "partition-table.bin", "offset": "0x8000", "size_bytes": 3072, "sha256": "34E04CBDD359DC4D3CFC3B0237762DA1D3A0D8CF8AA729280EECFBAAE9FB9DDB"},
+    "ota_data_initial": {"filename": "ota_data_initial.bin", "offset": "0xD000", "size_bytes": 8192, "sha256": "7D2C7AC4888BFD75CD5F56E8D61F69595121183AFC81556C876732FD3782C62F"},
+    "application": {"filename": "ecosensor03_v1.0.51.bin", "offset": "0x10000", "size_bytes": 1123168, "sha256": "D6423E1F1B79861C9EE2EEE59AF0DDA057EF6EF2CE1C8501A5C73A0B5C8A09A4"}
+  }
+}
