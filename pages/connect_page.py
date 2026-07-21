@@ -5,9 +5,9 @@ from nicegui import Client, app, ui
 
 from services.device_registry import active_device_options, ensure_active_devices, ensure_device_active, forget_device, host_for_device, probe_host, registry_revision, remember_host
 from services.main_window import register_main_window
-from services.esp_client import build_endpoints, sync_time_if_needed
+from services.esp_client import sync_time_if_needed
 from services.measurement_sync import coordinated_clear_history
-from services.ota_manager import start_device_ota
+from services.wifi_manager import clear_device_wifi
 from shared.formatters import device_display_name
 from shared.styles import add_styles
 
@@ -62,7 +62,6 @@ async def config_page(request: Request, client: Client) -> None:
                 with ui.row().classes('justify-center gap-3'):
                     clear_wifi_button = ui.button('Borrar datos de WiFi').props('unelevated color=negative text-color=white no-caps').classes('danger-outline-button action-button')
                     clear_history_button = ui.button('Borrar historial de mediciones').props('unelevated color=negative text-color=white no-caps').classes('danger-button action-button')
-                    ota_button = ui.button('Actualizar firmware OTA').props('unelevated no-caps').classes('action-button')
 
     async def refresh_sensor_options() -> None:
         nonlocal selected_device_id
@@ -138,15 +137,22 @@ async def config_page(request: Request, client: Client) -> None:
 
                 async def confirm() -> None:
                     dialog.close()
-                    result = await delete_json(build_endpoints(host)['wifi_clear'])
+                    result = await clear_device_wifi(device_id, host)
                     if result.get('ok'):
                         forget_device(device_id)
                         if app.storage.user.get('selected_device_id') == device_id:
                             app.storage.user.pop('selected_device_id', None)
-                        ui.notify(f'Credenciales WiFi borradas en {device_display_name(device_id)}. Quitado de las listas activas.', color='positive')
+                        if result.get('confirmed'):
+                            ui.notify(f'Credenciales WiFi borradas en {device_display_name(device_id)}. Quitado de las listas activas.', color='positive')
+                        else:
+                            ui.notify(
+                                f'Orden de borrado enviada a {device_display_name(device_id)}. '
+                                'El equipo cortó la conexión al reiniciarse; verifica que aparezca su red de configuración.',
+                                color='warning',
+                            )
                         await refresh_sensor_options()
                     else:
-                        ui.notify(f'No se pudo borrar WiFi: {result.get("data")}', color='negative')
+                        ui.notify(f'No se pudo borrar WiFi: {result.get("message") or result.get("error")}', color='negative')
 
                 ui.button('Borrar WiFi', on_click=confirm).props('unelevated color=negative')
         dialog.open()
@@ -176,16 +182,6 @@ async def config_page(request: Request, client: Client) -> None:
                 ui.button('Borrar historial', on_click=confirm).props('unelevated color=negative')
         dialog.open()
 
-    async def update_firmware() -> None:
-        device_id, host = await selected_host()
-        if not device_id or not host:
-            return
-        result = await start_device_ota(device_id)
-        if result.get('ok'):
-            ui.notify(f'OTA enviada a {device_display_name(device_id)}. El dispositivo se reiniciará al terminar.', color='positive')
-        else:
-            ui.notify(f'No se pudo iniciar OTA: {result.get("error")}', color='negative')
-
     async def on_sensor_change(event: Any) -> None:
         nonlocal selected_device_id
         selected_device_id = str(event.value or '') or None
@@ -206,6 +202,5 @@ async def config_page(request: Request, client: Client) -> None:
     connect_button.on('click', connect)
     clear_wifi_button.on('click', clear_wifi)
     clear_history_button.on('click', clear_history)
-    ota_button.on('click', update_firmware)
     ui.timer(1.0, refresh_options_if_registry_changed)
     ui.timer(0.1, refresh_sensor_options, once=True)
