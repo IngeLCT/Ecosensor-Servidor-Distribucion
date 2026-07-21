@@ -191,6 +191,15 @@ def _add_graph_styles() -> None:
             font-weight: bold;
             text-align: center;
         }
+        .history-variable-select .q-field__control {
+            background-color: #fff !important;
+        }
+        .history-variable-select .q-field__native,
+        .history-variable-select .q-field__input {
+            color: #000 !important;
+            font-size: 20px !important;
+            font-weight: 700 !important;
+        }
         .history-slider-box {
             width: 100%;
             max-width: 900px;
@@ -945,7 +954,11 @@ async def history_graph(request: Request, client: Client) -> None:
         id_label = ui.label('ID: -').classes('section-title')
         with ui.column().classes('history-controls'):
             ui.label('Seleccionar Dato a Graficar:').classes('history-select-label')
-            selector = ui.select(HISTORY_SELECT_OPTIONS, value='pm1p0').props('outlined dense').classes('w-full')
+            selector = (
+                ui.select(HISTORY_SELECT_OPTIONS, value='pm1p0')
+                .props('outlined dense')
+                .classes('w-full history-variable-select')
+            )
         with ui.column().classes('agg-toolbar-wrap'):
             ui.label('Historial').classes('agg-chart-title')
 
