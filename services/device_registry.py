@@ -2,7 +2,6 @@ import asyncio
 import ipaddress
 import re
 import socket
-import subprocess
 from datetime import datetime, timedelta
 from time import perf_counter
 from typing import Any
@@ -75,29 +74,40 @@ async def _tcp_port_open(host: str, timeout: float) -> bool:
     return await asyncio.to_thread(_tcp_port_open_sync, host, timeout)
 
 
-def _resolve_host_quick_sync(host: str, timeout: float = 0.4) -> str | None:
+def _resolve_host_quick_sync(host: str) -> str | None:
+    """Resuelve un host mediante el resolvedor nativo del sistema operativo.
+
+    ``socket.getaddrinfo`` permite que Windows use su soporte mDNS para nombres
+    ``.local`` y evita depender de ``getent``, una utilidad normalmente ausente
+    en los ejecutables Windows. El timeout se aplica en la envoltura asíncrona.
+    """
     target, _ = _host_port(host)
     if _is_valid_ip(target):
         return target
     try:
-        result = subprocess.run(
-            ['getent', 'hosts', target],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        addresses = socket.getaddrinfo(
+            target,
+            None,
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, socket.gaierror):
         return None
-    for line in result.stdout.splitlines():
-        parts = line.split()
-        if parts and _is_valid_ip(parts[0]):
-            return parts[0]
+    for address in addresses:
+        resolved_ip = str(address[4][0] or '').strip()
+        if _is_valid_ip(resolved_ip):
+            return resolved_ip
     return None
 
 
 async def _resolve_host_quick(host: str, timeout: float = 0.4) -> str | None:
-    return await asyncio.to_thread(_resolve_host_quick_sync, host, timeout)
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_resolve_host_quick_sync, host),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        return None
 
 
 async def _async_tcp_port_open(host: str, timeout: float) -> bool:
@@ -230,41 +240,49 @@ def configured_hosts() -> list[str]:
     return hosts
 
 
+def _append_usable_local_ipv4(addresses: list[str], value: str | None) -> None:
+    try:
+        address = ipaddress.ip_address(str(value or '').strip())
+    except ValueError:
+        return
+    if (
+        address.version != 4
+        or not address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_unspecified
+    ):
+        return
+    text = str(address)
+    if text not in addresses:
+        addresses.append(text)
+
+
 def _local_ipv4_addresses() -> list[str]:
+    """Enumera IPv4 privadas utilizables con APIs disponibles en Windows."""
     addresses: list[str] = []
 
-    # Método stdlib: detecta la IP local usada para salir a la red.
+    # Detecta primero la interfaz que Windows usaría para salir a la red.
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(0.2)
             sock.connect(('8.8.8.8', 80))
-            ip = sock.getsockname()[0]
-            if ip and ip not in addresses:
-                addresses.append(ip)
+            _append_usable_local_ipv4(addresses, sock.getsockname()[0])
     except OSError:
         pass
 
-    # Método Linux: recoge todas las IPv4 activas por si hay varias interfaces.
+    # Añade las demás IPv4 que Windows asocia al nombre del equipo. Esto cubre
+    # Wi-Fi y Ethernet simultáneos sin ejecutar comandos externos como `ip`.
     try:
-        result = subprocess.run(
-            ['ip', '-o', '-4', 'addr', 'show', 'scope', 'global'],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=1.0,
+        local_addresses = socket.getaddrinfo(
+            socket.gethostname(),
+            None,
+            family=socket.AF_INET,
+            type=socket.SOCK_DGRAM,
         )
-        for line in result.stdout.splitlines():
-            parts = line.split()
-            if len(parts) < 4 or 'inet' not in parts:
-                continue
-            interface = parts[1]
-            if interface.startswith(('docker', 'br-', 'veth', 'tailscale', 'tun', 'wg')):
-                continue
-            cidr = parts[parts.index('inet') + 1]
-            ip = cidr.split('/', 1)[0]
-            if ip and ip not in addresses:
-                addresses.append(ip)
-    except (OSError, subprocess.SubprocessError):
+        for item in local_addresses:
+            _append_usable_local_ipv4(addresses, item[4][0])
+    except (OSError, socket.gaierror):
         pass
 
     return addresses
