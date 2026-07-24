@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime
 from typing import Any
 
-from config import UI_PORT
+from config import get_selected_ui_port
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -303,11 +303,12 @@ async def sync_time_if_needed(host: str, timeout: float = 4.0) -> dict[str, Any]
 
 
 
-def push_host_payload(target_host: str) -> dict[str, str]:
-    payload: dict[str, str] = {}
+def push_host_payload(target_host: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
     server_ip = _local_ip_for_target(target_host)
     if server_ip:
         payload['push_host'] = server_ip
+        payload['push_port'] = get_selected_ui_port()
     return payload
 
 def configure_push_host_sync(host: str, timeout: float = 4.0) -> dict[str, Any]:
@@ -325,6 +326,7 @@ def configure_push_host_sync(host: str, timeout: float = 4.0) -> dict[str, Any]:
         'sync': sync_response,
         'status': confirm_status,
         'push_host': payload.get('push_host'),
+        'push_port': payload.get('push_port'),
     }
 
 
@@ -437,4 +439,5 @@ def system_datetime_payload(target_host: str | None = None) -> dict[str, Any]:
         server_ip = _local_ip_for_target(target_host)
         if server_ip:
             payload['push_host'] = server_ip
+            payload['push_port'] = get_selected_ui_port()
     return payload

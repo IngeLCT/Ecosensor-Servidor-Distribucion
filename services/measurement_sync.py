@@ -189,6 +189,7 @@ async def _configure_push_host_if_overdue(device_id: str, host: str, row: dict[s
         return
 
     current_push_host = str((status_data or {}).get('push_host') or '').strip() if isinstance(status_data, dict) else ''
+    current_push_port = (status_data or {}).get('push_port') if isinstance(status_data, dict) else None
     result = await configure_push_host(host, timeout=3.0)
     record_sync_event(
         device_id,
@@ -198,19 +199,22 @@ async def _configure_push_host_if_overdue(device_id: str, host: str, row: dict[s
         age_s=age_s,
         window_s=window_s,
         previous_push_host=current_push_host or None,
+        previous_push_port=current_push_port,
         push_host=result.get('push_host'),
+        push_port=result.get('push_port'),
         response=summarize_response(result.get('sync')),
     )
     if result.get('ok'):
         confirm = result.get('status') if isinstance(result.get('status'), dict) else {}
         confirm_data = confirm.get('data') if isinstance(confirm.get('data'), dict) else {}
         reported_push_host = confirm_data.get('push_host') if isinstance(confirm_data, dict) else None
+        reported_push_port = confirm_data.get('push_port') if isinstance(confirm_data, dict) else None
         can_push = confirm_data.get('can_push') if isinstance(confirm_data, dict) else None
         wifi = confirm_data.get('wifi') if isinstance(confirm_data, dict) else None
         print(
             f"[measurement_sync] {device_id}: push sin recibir hace {age_s}s; "
-            f"push_host enviado={result.get('push_host')}; "
-            f"reportado={reported_push_host}; wifi={wifi}; can_push={can_push}",
+            f"destino enviado={result.get('push_host')}:{result.get('push_port')}; "
+            f"reportado={reported_push_host}:{reported_push_port}; wifi={wifi}; can_push={can_push}",
             flush=True,
         )
 

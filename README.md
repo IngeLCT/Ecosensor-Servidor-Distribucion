@@ -8,6 +8,8 @@ Versión limpia para prueba de distribución.
 - Detección de EcoSensores activos por IP/mDNS.
 - Sincronización de fecha/hora del EcoSensor.
 - Recepción de mediciones por `POST /api/measurements/push`.
+- Configuración dinámica de `push_host` y `push_port` en cada EcoSensor según
+  la IP local y el puerto HTTP realmente seleccionado al iniciar el servidor.
 - Sincronización de historial desde el EcoSensor como respaldo.
 - Gráficas e historial local en SQLite.
 - Exportación CSV de mediciones.
