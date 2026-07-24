@@ -10,6 +10,8 @@ Versión limpia para prueba de distribución.
 - Recepción de mediciones por `POST /api/measurements/push`.
 - Configuración dinámica de `push_host` y `push_port` en cada EcoSensor según
   la IP local y el puerto HTTP realmente seleccionado al iniciar el servidor.
+- Verificación automática del destino push reportado por `/status`: si el host
+  o el puerto no coincide, el servidor envía ambos valores inmediatamente.
 - Sincronización de historial desde el EcoSensor como respaldo.
 - Gráficas e historial local en SQLite.
 - Exportación CSV de mediciones.
@@ -26,14 +28,20 @@ python main.py
 Por defecto escucha en:
 
 ```text
-http://localhost:8765
+http://localhost:80
 ```
+
+Si el puerto 80 está ocupado, intenta 8765 y después el primer puerto disponible
+entre 8766 y 8799.
 
 Variables opcionales:
 
 ```bash
 ECOSENSOR_SERVER_HOST=0.0.0.0
-ECOSENSOR_SERVER_PORT=8765
+ECOSENSOR_SERVER_PORT=80
+ECOSENSOR_SERVER_FALLBACK_PORT=8765
+ECOSENSOR_SERVER_PORT_SCAN_START=8766
+ECOSENSOR_SERVER_PORT_SCAN_END=8799
 ECOSENSOR_MDNS_HOSTNAME=ecosensor-servidor
 ```
 

@@ -15,7 +15,16 @@ from services.device_registry import (
     recently_seen_devices,
     refresh_active_devices,
 )
-from services.esp_client import build_endpoints, configure_push_host, delete_json, fetch_json, fetch_readings_export, fetch_readings_range, sync_time_if_needed
+from services.esp_client import (
+    build_endpoints,
+    configure_push_host,
+    delete_json,
+    fetch_json,
+    fetch_readings_export,
+    fetch_readings_range,
+    push_host_payload,
+    sync_time_if_needed,
+)
 from services.history_reset_state import begin_history_reset, finish_history_reset, history_reset_in_progress
 from shared.formatters import row_from_payload
 from shared.time_utils import parse_timestamp, server_local_now
@@ -183,9 +192,38 @@ def _status_is_active_for_push(status_data: Any) -> bool:
     return wifi == 'connected' and sensors == 'running'
 
 
-async def _configure_push_host_if_overdue(device_id: str, host: str, row: dict[str, Any] | None, status_data: Any) -> None:
+def _push_target_differs(status_data: Any, expected_target: dict[str, Any]) -> bool:
+    if not isinstance(status_data, dict):
+        return False
+
+    expected_host = str(expected_target.get('push_host') or '').strip()
+    try:
+        expected_port = int(expected_target.get('push_port'))
+    except (TypeError, ValueError):
+        return False
+    if not expected_host or not 1 <= expected_port <= 65535:
+        return False
+
+    reported_host = str(status_data.get('push_host') or '').strip()
+    try:
+        reported_port = int(status_data.get('push_port'))
+    except (TypeError, ValueError):
+        reported_port = 0
+
+    return reported_host != expected_host or reported_port != expected_port
+
+
+async def _configure_push_host_if_needed(
+    device_id: str,
+    host: str,
+    row: dict[str, Any] | None,
+    status_data: Any,
+) -> None:
     overdue, age_s, window_s = _push_overdue(row)
-    if not overdue or not _status_is_active_for_push(status_data):
+    expected_target = push_host_payload(host)
+    target_differs = _push_target_differs(status_data, expected_target)
+    overdue_recovery = overdue and _status_is_active_for_push(status_data)
+    if not target_differs and not overdue_recovery:
         return
 
     current_push_host = str((status_data or {}).get('push_host') or '').strip() if isinstance(status_data, dict) else ''
@@ -196,6 +234,7 @@ async def _configure_push_host_if_overdue(device_id: str, host: str, row: dict[s
         'configure_push_host',
         host=host,
         ok=bool(result.get('ok')),
+        reason='target_mismatch' if target_differs else 'push_overdue',
         age_s=age_s,
         window_s=window_s,
         previous_push_host=current_push_host or None,
@@ -211,12 +250,21 @@ async def _configure_push_host_if_overdue(device_id: str, host: str, row: dict[s
         reported_push_port = confirm_data.get('push_port') if isinstance(confirm_data, dict) else None
         can_push = confirm_data.get('can_push') if isinstance(confirm_data, dict) else None
         wifi = confirm_data.get('wifi') if isinstance(confirm_data, dict) else None
-        print(
-            f"[measurement_sync] {device_id}: push sin recibir hace {age_s}s; "
-            f"destino enviado={result.get('push_host')}:{result.get('push_port')}; "
-            f"reportado={reported_push_host}:{reported_push_port}; wifi={wifi}; can_push={can_push}",
-            flush=True,
-        )
+        if target_differs:
+            print(
+                f"[measurement_sync] {device_id}: destino push desactualizado "
+                f"({current_push_host or 'null'}:{current_push_port}); "
+                f"destino enviado={result.get('push_host')}:{result.get('push_port')}; "
+                f"reportado={reported_push_host}:{reported_push_port}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[measurement_sync] {device_id}: push sin recibir hace {age_s}s; "
+                f"destino enviado={result.get('push_host')}:{result.get('push_port')}; "
+                f"reportado={reported_push_host}:{reported_push_port}; wifi={wifi}; can_push={can_push}",
+                flush=True,
+            )
 
 
 def display_host(host: str) -> str:
@@ -369,7 +417,7 @@ async def sync_sensor_measurements(
             # /status válido; usarlo evita esperar al siguiente push para saber
             # que hay histórico en SD.
             status_data = active.get('status') or {}
-        await _configure_push_host_if_overdue(selected_device_id, host_now, initial_row, status_data)
+        await _configure_push_host_if_needed(selected_device_id, host_now, initial_row, status_data)
 
         endpoints_now = build_endpoints(host_now)
         row = None
