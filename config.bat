@@ -27,7 +27,7 @@ if not exist ".\run.bat" (
 
 if not exist ".\run_hidden.vbs" (
     echo ERROR: No se encontro .\run_hidden.vbs
-    echo Actualiza el portable con actualizar_portable_py.ps1 o vuelve a crear el portable.
+    echo La distribucion esta incompleta o fue movida.
     echo.
     pause
     exit /b 1

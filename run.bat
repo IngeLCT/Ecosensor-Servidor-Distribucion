@@ -10,7 +10,7 @@ echo.
 
 if not exist ".\python\python.exe" (
     echo ERROR: No se encontro .\python\python.exe
-    echo Ejecuta primero crear_portable.ps1 para preparar la carpeta portable.
+    echo La distribucion esta incompleta o fue movida.
     echo.
     pause
     exit /b 1
