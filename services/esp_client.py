@@ -198,7 +198,13 @@ def _local_ipv4_candidates() -> list[str]:
     )
     for command in commands:
         try:
-            output = subprocess.check_output(command, text=True, stderr=subprocess.DEVNULL, timeout=1.5)
+            output = subprocess.check_output(
+                command,
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=1.5,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+            )
         except (OSError, subprocess.SubprocessError):
             continue
         for ip in re.findall(r'(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)', output):
